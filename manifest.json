@@ -1,7 +1,7 @@
 {
   "name": "Oriente Fraterno 148",
   "short_name": "OF 148",
-  "description": "Registro de Eventos - Logia Oriente Fraterno N° 148",
+  "description": "Registro de Eventos - Logia Oriente Fraterno N°148",
   "start_url": "/oriente-fraterno/",
   "scope": "/oriente-fraterno/",
   "display": "standalone",
@@ -11,13 +11,13 @@
   "id": "of148",
   "icons": [
     {
-      "src": "/oriente-fraterno/icon-192.png",
+      "src": "icon-192.png",
       "sizes": "192x192",
       "type": "image/png",
       "purpose": "any"
     },
     {
-      "src": "/oriente-fraterno/icon-512.png",
+      "src": "icon-512.png",
       "sizes": "512x512",
       "type": "image/png",
       "purpose": "any maskable"
