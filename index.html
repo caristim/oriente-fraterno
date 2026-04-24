@@ -1,84 +1,27 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="es">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Registro Eventos · Oriente Fraterno</title>
-  <meta name="theme-color" content="#0f172a" />
-  <meta name="apple-mobile-web-app-capable" content="yes" />
-  <link rel="manifest" href="manifest.json" />
-  <link rel="icon" type="image/png" href="icon-192.png" />
-  <link rel="apple-touch-icon" href="icon-192.png" />
-
-  <script src="https://cdn.tailwindcss.com"></script>
-  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-  <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
-
-  <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
-  <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore-compat.js"></script>
-  <script>
-    const firebaseConfig = {
-      apiKey: "AIzaSyD9gQW61AvKHhNai6gljNFE7q9rS7KKuN8",
-      authDomain: "orientefraterno148-2a0c1.firebaseapp.com",
-      projectId: "orientefraterno148-2a0c1",
-      storageBucket: "orientefraterno148-2a0c1.firebasestorage.app",
-      messagingSenderId: "101867774014",
-      appId: "1:101867774014:web:0b4bb797293910c419716f"
-    };
-    firebase.initializeApp(firebaseConfig);
-    const db = firebase.firestore();
-  </script>
-
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Oriente Fraterno 148</title>
+  <meta name="theme-color" content="#0f172a">
+  <link rel="manifest" href="/oriente-fraterno/manifest.json">
+  <link rel="icon" href="/oriente-fraterno/assets/icon-192.png" sizes="192x192">
   <style>
-    body { background-color: #0f172a; color: white; font-family: sans-serif; }
-    .gold-border { border-color: rgba(201,168,76,0.3); }
+    body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial; margin: 1rem; background:#fff; color:#111; }
+    .switch { display:flex; align-items:center; gap:.5rem; }
   </style>
 </head>
 <body>
-  <div id="root"></div>
+  <h1>Oriente Fraterno 148</h1>
+  <p>Bienvenido. Usa el interruptor para activar o desactivar notificaciones.</p>
 
-  <script type="text/babel">
-    const { useState, useEffect } = React;
+  <div class="switch">
+    <label for="notif-toggle">Notificaciones</label>
+    <input type="checkbox" id="notif-toggle" aria-label="Activar notificaciones">
+    <span id="notif-status" style="margin-left:1rem;color:#666"></span>
+  </div>
 
-    function App() {
-      const [events, setEvents] = useState([]);
-      const [loading, setLoading] = useState(true);
-
-      useEffect(() => {
-        // Conexión real a tu base de datos
-        const unsub = db.collection('eventos').onSnapshot(snap => {
-          setEvents(snap.docs.map(d => ({ id: d.id, ...d.data() })));
-          setLoading(false);
-        });
-        return () => unsub();
-      }, []);
-
-      if (loading) return <div style={{padding: '20px'}}>Cargando registros de la Logia...</div>;
-
-      return (
-        <div style={{maxWidth: '500px', margin: '0 auto', padding: '20px'}}>
-          <header style={{borderBottom: '1px solid gold', paddingBottom: '10px', marginBottom: '20px'}}>
-            <h1 style={{color: '#c9a84c'}}>Oriente Fraterno 148</h1>
-            <button onClick={() => Notification.requestPermission()} style={{background: 'none', border: '1px solid gold', color: 'gold', padding: '5px 10px', borderRadius: '5px'}}>
-              Activar Notificaciones
-            </button>
-          </header>
-          
-          <div style={{display: 'flex', flexDirection: 'column', gap: '10px'}}>
-            {events.map(ev => (
-              <div key={ev.id} style={{padding: '15px', borderRadius: '8px', border: '1px solid rgba(201,168,76,0.2)', background: 'rgba(255,255,255,0.05)'}}>
-                <div style={{color: '#c9a84c', fontWeight: 'bold'}}>{ev.nombre}</div>
-                <div style={{fontSize: '0.8em', opacity: 0.7}}>{ev.tipo} — {ev.fecha}</div>
-              </div>
-            ))}
-          </div>
-        </div>
-      );
-    }
-
-    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
-  </script>
+  <script src="/oriente-fraterno/main.js" defer></script>
 </body>
 </html>
