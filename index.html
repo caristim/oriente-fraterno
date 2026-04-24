@@ -6,7 +6,6 @@
   <title>Registro Eventos · Oriente Fraterno</title>
   <meta name="theme-color" content="#0f172a" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
-  
   <link rel="manifest" href="manifest.json" />
   <link rel="icon" type="image/png" href="icon-192.png" />
   <link rel="apple-touch-icon" href="icon-192.png" />
@@ -33,63 +32,53 @@
   </script>
 
   <style>
-    body { font-family: 'Crimson Pro', Georgia, serif; background-color: #0f172a; color: white; }
-    .bg-grid { background-image: radial-gradient(circle at 2px 2px, rgba(201,168,76,0.05) 1px, transparent 0); background-size: 40px 40px; }
+    body { background-color: #0f172a; color: white; font-family: sans-serif; }
+    .gold-border { border-color: rgba(201,168,76,0.3); }
   </style>
 </head>
-<body class="bg-grid min-h-screen">
+<body>
   <div id="root"></div>
 
   <script type="text/babel">
     const { useState, useEffect } = React;
 
     function App() {
-      const [notifPerm, setNotifPerm] = useState(Notification.permission);
+      const [events, setEvents] = useState([]);
+      const [loading, setLoading] = useState(true);
 
       useEffect(() => {
-        // Registrar Service Worker físico
-        if ('serviceWorker' in navigator) {
-          navigator.serviceWorker.register('sw.js')
-            .then(reg => console.log('SW Registrado'))
-            .catch(err => console.error('Error SW:', err));
-        }
+        // Conexión real a tu base de datos
+        const unsub = db.collection('eventos').onSnapshot(snap => {
+          setEvents(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+          setLoading(false);
+        });
+        return () => unsub();
       }, []);
 
-      const requestPermission = async () => {
-        const permission = await Notification.requestPermission();
-        setNotifPerm(permission);
-        if (permission === 'granted') {
-          alert("¡Notificaciones activadas!");
-        }
-      };
+      if (loading) return <div style={{padding: '20px'}}>Cargando registros de la Logia...</div>;
 
       return (
-        <div className="max-w-lg mx-auto p-4">
-          <header className="flex justify-between items-center py-6 border-b border-yellow-900/30">
-            <div>
-              <h1 className="text-xl font-bold text-yellow-600 tracking-widest uppercase">Oriente Fraterno</h1>
-              <p className="text-xs text-yellow-700 italic">Logia N° 148</p>
-            </div>
-            <button 
-              onClick={requestPermission}
-              className={`p-2 rounded-full border ${notifPerm === 'granted' ? 'border-yellow-600 text-yellow-600' : 'border-gray-600 text-gray-500'}`}
-            >
-              <i data-lucide={notifPerm === 'granted' ? "bell" : "bell-off"}></i>
+        <div style={{maxWidth: '500px', margin: '0 auto', padding: '20px'}}>
+          <header style={{borderBottom: '1px solid gold', paddingBottom: '10px', marginBottom: '20px'}}>
+            <h1 style={{color: '#c9a84c'}}>Oriente Fraterno 148</h1>
+            <button onClick={() => Notification.requestPermission()} style={{background: 'none', border: '1px solid gold', color: 'gold', padding: '5px 10px', borderRadius: '5px'}}>
+              Activar Notificaciones
             </button>
           </header>
-
-          <main className="mt-8">
-             {/* El resto de tu lógica de React de visualización de eventos va aquí */}
-             <div className="bg-navy-800 p-6 rounded-lg border border-yellow-900/20 text-center">
-                <p className="text-yellow-600/80 italic">Cargando registros de la Logia...</p>
-             </div>
-          </main>
+          
+          <div style={{display: 'flex', flexDirection: 'column', gap: '10px'}}>
+            {events.map(ev => (
+              <div key={ev.id} style={{padding: '15px', borderRadius: '8px', border: '1px solid rgba(201,168,76,0.2)', background: 'rgba(255,255,255,0.05)'}}>
+                <div style={{color: '#c9a84c', fontWeight: 'bold'}}>{ev.nombre}</div>
+                <div style={{fontSize: '0.8em', opacity: 0.7}}>{ev.tipo} — {ev.fecha}</div>
+              </div>
+            ))}
+          </div>
         </div>
       );
     }
 
     ReactDOM.createRoot(document.getElementById('root')).render(<App />);
-    setTimeout(() => lucide.createIcons(), 500);
   </script>
 </body>
 </html>
