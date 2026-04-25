@@ -1,67 +1,45 @@
-<!DOCTYPE html>
-<html lang="es">
-<head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Registro Eventos · Oriente Fraterno</title>
-
-  <script>
-  // ===== FIX NOTIFICACIONES =====
-  async function handleNotify() {
-
-    if (!('Notification' in window)) {
-      showToast('Navegador no soportado');
-      return;
-    }
-
-    if (!window.isSecureContext) {
-      showToast('Se requiere HTTPS');
-      return;
-    }
-
-    try {
-      if (!swRegistration) {
-        await registerServiceWorker();
-      }
-
-      if (!swRegistration) {
-        showToast('Error Service Worker');
-        return;
-      }
-
-      if (Notification.permission === 'granted') {
-        showToast('Notificaciones ya activas ✦');
-        return;
-      }
-
-      if (Notification.permission === 'denied') {
-        showToast('Permiso bloqueado');
-        return;
-      }
-
-      const perm = await Notification.requestPermission();
-
-      if (perm === 'granted') {
-        await syncEventsToSW(events);
-        events.forEach(scheduleNotification);
-        showToast('Notificaciones activadas ✦');
-      } else {
-        showToast('Permiso denegado');
-      }
-
-    } catch (err) {
-      console.error(err);
-      showToast('Error al activar notificaciones');
-    }
+async function handleNotify() {
+  if (!('Notification' in window)) {
+    showToast('Navegador no soportado');
+    return;
   }
-  </script>
 
-  <!-- TODO EL RESTO DE TU ARCHIVO SIGUE IGUAL -->
-</head>
+  if (!window.isSecureContext) {
+    showToast('Se requiere HTTPS');
+    return;
+  }
 
-<body>
-  <div id="root"></div>
+  try {
+    const registration = await navigator.serviceWorker.ready;
 
-  <!-- TODO TU SCRIPT ORIGINAL COMPLETO (React, Firebase, etc.) -->
-</body>
-</html>
+    if (!registration) {
+      showToast('Service Worker no listo');
+      return;
+    }
+
+    if (Notification.permission === 'granted') {
+      showToast('Notificaciones ya activas ✦');
+      return;
+    }
+
+    if (Notification.permission === 'denied') {
+      showToast('Permiso bloqueado');
+      return;
+    }
+
+    const perm = await Notification.requestPermission();
+    setNotifPerm(perm);
+
+    if (perm === 'granted') {
+      events.forEach(scheduleNotification);
+      await syncEventsToSW(events);
+      showToast('Notificaciones activadas ✦');
+    } else {
+      showToast('Permiso denegado');
+    }
+
+  } catch (err) {
+    console.error(err);
+    showToast('Error al activar notificaciones');
+  }
+}
