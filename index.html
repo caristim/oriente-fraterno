@@ -1,116 +1,67 @@
-<script>
-// ===============================
-// SERVICE WORKER
-// ===============================
-let swRegistration = null;
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Registro Eventos · Oriente Fraterno</title>
 
-const swCode = `
-let events = [];
+  <script>
+  // ===== FIX NOTIFICACIONES =====
+  async function handleNotify() {
 
-self.addEventListener('install', e => self.skipWaiting());
-self.addEventListener('activate', e => e.waitUntil(self.clients.claim()));
-
-self.addEventListener('message', event => {
-  if (event.data.type === 'SYNC_EVENTS') {
-    events = event.data.events;
-    scheduleNotifications();
-  }
-});
-
-function scheduleNotifications() {
-  events.forEach(ev => {
-    const now = Date.now();
-    const eventTime = new Date(ev.date).getTime();
-
-    if (eventTime > now) {
-      const delay = eventTime - now;
-
-      setTimeout(() => {
-        self.registration.showNotification(ev.title, {
-          body: ev.description || 'Recordatorio',
-          icon: 'icon.png'
-        });
-      }, delay);
-    }
-  });
-}
-`;
-
-async function registerServiceWorker() {
-  if (!('serviceWorker' in navigator)) return null;
-
-  try {
-    const blob = new Blob([swCode], { type: 'text/javascript' });
-    const url = URL.createObjectURL(blob);
-
-    swRegistration = await navigator.serviceWorker.register(url);
-    await navigator.serviceWorker.ready;
-
-    return swRegistration;
-  } catch (err) {
-    console.error(err);
-    return null;
-  }
-}
-
-// ===============================
-// NOTIFICACIONES
-// ===============================
-async function handleNotify() {
-
-  if (!('Notification' in window)) {
-    alert('Navegador no compatible');
-    return;
-  }
-
-  if (!window.isSecureContext) {
-    alert('Debes usar HTTPS');
-    return;
-  }
-
-  try {
-    if (!swRegistration) {
-      await registerServiceWorker();
-    }
-
-    if (!swRegistration) {
-      alert('Error en Service Worker');
+    if (!('Notification' in window)) {
+      showToast('Navegador no soportado');
       return;
     }
 
-    if (Notification.permission === 'granted') {
-      alert('Ya están activadas');
+    if (!window.isSecureContext) {
+      showToast('Se requiere HTTPS');
       return;
     }
 
-    if (Notification.permission === 'denied') {
-      alert('Permiso bloqueado');
-      return;
+    try {
+      if (!swRegistration) {
+        await registerServiceWorker();
+      }
+
+      if (!swRegistration) {
+        showToast('Error Service Worker');
+        return;
+      }
+
+      if (Notification.permission === 'granted') {
+        showToast('Notificaciones ya activas ✦');
+        return;
+      }
+
+      if (Notification.permission === 'denied') {
+        showToast('Permiso bloqueado');
+        return;
+      }
+
+      const perm = await Notification.requestPermission();
+
+      if (perm === 'granted') {
+        await syncEventsToSW(events);
+        events.forEach(scheduleNotification);
+        showToast('Notificaciones activadas ✦');
+      } else {
+        showToast('Permiso denegado');
+      }
+
+    } catch (err) {
+      console.error(err);
+      showToast('Error al activar notificaciones');
     }
-
-    const perm = await Notification.requestPermission();
-
-    if (perm === 'granted') {
-      swRegistration.active.postMessage({
-        type: 'SYNC_EVENTS',
-        events: events // usa tu array actual
-      });
-
-      alert('Notificaciones activadas');
-    } else {
-      alert('Permiso denegado');
-    }
-
-  } catch (err) {
-    console.error(err);
-    alert('Error al activar');
   }
-}
+  </script>
 
-// ===============================
-// INIT
-// ===============================
-window.addEventListener('load', async () => {
-  await registerServiceWorker();
-});
-</script>
+  <!-- TODO EL RESTO DE TU ARCHIVO SIGUE IGUAL -->
+</head>
+
+<body>
+  <div id="root"></div>
+
+  <!-- TODO TU SCRIPT ORIGINAL COMPLETO (React, Firebase, etc.) -->
+</body>
+</html>
