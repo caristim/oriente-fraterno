@@ -1,215 +1,167 @@
-<script type="text/babel">
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Registro Eventos · Oriente Fraterno</title>
+  <meta name="theme-color" content="#0f172a" />
+  
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+  <script src="https://unpkg.com/lucide@latest"></script>
+
+  <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js"></script>
+
+  <style>
+    @import url('https://fonts.googleapis.com/css2?family=Cinzel:wght@400;700&family=Inter:wght@300;400;600&display=swap');
+    :root { --gold: #c5a059; --navy: #0f172a; }
+    body { background-color: var(--navy); color: white; font-family: 'Inter', sans-serif; }
+    .font-cinzel { font-family: 'Cinzel', serif; }
+    .gold-border { border-color: rgba(197, 160, 89, 0.3); }
+  </style>
+</head>
+<body>
+  <div id="root">
+    <div class="flex items-center justify-center min-h-screen font-cinzel text-gold">
+      Iniciando Templo...
+    </div>
+  </div>
+
+  <script type="text/babel">
     const { useState, useEffect, useCallback, useRef } = React;
 
-    const STORAGE_KEY = 'orienteFraterno_v2';
-    const TIPOS = [
-      { value: 'Cumpleaños',               label: 'Cumpleaños',               emoji: '🎂' },
-      { value: 'Fecha de casamiento',       label: 'Fecha de casamiento',       emoji: '💍' },
-      { value: 'Aniversario',               label: 'Aniversario',               emoji: '🌹' },
-      { value: 'Pasaje al Oriente Eterno',  label: 'Pasaje al Oriente Eterno',  emoji: '✦'  },
-    ];
-
-    const TIPO_STYLES = {
-      'Cumpleaños':               'bg-amber-900/20  border-amber-600/30',
-      'Fecha de casamiento':      'bg-purple-900/20 border-purple-500/30',
-      'Aniversario':              'bg-rose-900/20   border-rose-600/30',
-      'Pasaje al Oriente Eterno': 'bg-slate-800/50  border-slate-500/30',
+    // --- CONFIGURACIÓN FIREBASE ---
+    const firebaseConfig = {
+      apiKey: "AIzaSyAs-TU-API-KEY",
+      authDomain: "oriente-fraterno.firebaseapp.com",
+      projectId: "oriente-fraterno",
+      storageBucket: "oriente-fraterno.appspot.com",
+      messagingSenderId: "931215446059",
+      appId: "1:931215446059:web:78c187515f482d8d85f838"
     };
 
-    function loadEvents()  { try { return JSON.parse(localStorage.getItem(STORAGE_KEY)) || []; } catch { return []; } }
-    function saveEvents(l) { localStorage.setItem(STORAGE_KEY, JSON.stringify(l)); }
+    if (!firebase.apps.length) firebase.initializeApp(firebaseConfig);
+    const db = firebase.firestore();
 
-    async function saveEventToFirebase(ev) {
-      try { await db.collection('eventos').doc(String(ev.id)).set(ev); } catch(e) { console.warn(e); }
-    }
-
-    async function deleteEventFromFirebase(ev) {
-      try { await db.collection('eventos').doc(ev.docId || String(ev.id)).delete(); } catch(e) { console.warn(e); }
-    }
-
-    function daysUntil(iso) {
-      const today = new Date(); today.setHours(0,0,0,0);
-      const [m, d] = iso.split('-');
-      let next = new Date(today.getFullYear(), +m - 1, +d);
-      if (next < today) next.setFullYear(next.getFullYear() + 1);
-      return Math.round((next - today) / 86400000);
-    }
-
-    // REGISTRO CORRECTO DEL SERVICE WORKER
-    async function registerServiceWorker() {
-      if (!('serviceWorker' in navigator)) return null;
-      try {
-        const reg = await navigator.serviceWorker.register('./sw.js');
-        if ('periodicSync' in reg) {
-          try {
-            const status = await navigator.permissions.query({ name: 'periodic-background-sync' });
-            if (status.state === 'granted') {
-              await reg.periodicSync.register('of-daily-check', { minInterval: 24 * 60 * 60 * 1000 });
-            }
-          } catch (e) { console.log("PeriodicSync no disponible aún"); }
-        }
-        return reg;
-      } catch (err) {
-        console.error('SW Error:', err);
-        return null;
-      }
-    }
-
-    async function syncEventsToSW(events) {
-      if (!navigator.serviceWorker.controller) return;
-      navigator.serviceWorker.controller.postMessage({ type: 'SCHEDULE_EVENTS', events });
-    }
-
-    function Icon({ name, size = 18, className = '' }) {
+    // --- COMPONENTES ---
+    const Icon = ({ name, size = 18 }) => {
       const ref = useRef(null);
       useEffect(() => {
         if (ref.current && window.lucide) {
           ref.current.innerHTML = '';
-          const icon = lucide.createElement(lucide[name] || lucide['HelpCircle']);
+          const icon = lucide.createElement(lucide[name] || lucide.HelpCircle);
           icon.setAttribute('width', size);
           icon.setAttribute('height', size);
-          if (className) icon.setAttribute('class', className);
           ref.current.appendChild(icon);
         }
-      }, [name, size, className]);
-      return <span ref={ref} style={{display:'inline-flex',alignItems:'center'}} />;
-    }
-
-    function Toast({ message, visible }) {
-      return (
-        <div className={`fixed bottom-6 left-1/2 z-50 px-5 py-2.5 rounded-full bg-gradient-to-r from-gold to-gold-light text-navy-DEFAULT font-cinzel text-xs tracking-widest uppercase shadow-lg transition-all ${visible ? 'opacity-100' : 'opacity-0'}`} style={{ transform: 'translateX(-50%)' }}>
-          {message}
-        </div>
-      );
-    }
-
-    function Divider({ label }) {
-      return (
-        <div className="flex items-center gap-3 my-6">
-          <div className="flex-1 h-px bg-gradient-to-r from-transparent via-gold/40 to-transparent" />
-          <span className="font-cinzel text-gold text-xs tracking-widest uppercase">{label}</span>
-          <div className="flex-1 h-px bg-gradient-to-r from-transparent via-gold/40 to-transparent" />
-        </div>
-      );
-    }
-
-    function Card({ children, className = '' }) {
-      return <div className={`rounded-lg border gold-border bg-navy-mid/80 shadow-xl backdrop-blur-sm ${className}`}>{children}</div>;
-    }
+      }, [name, size]);
+      return <span ref={ref} className="inline-flex" />;
+    };
 
     function App() {
-      const [events, setEvents] = useState(loadEvents);
+      const [events, setEvents] = useState([]);
+      const [loading, setLoading] = useState(true);
       const [nombre, setNombre] = useState('');
+      const [tipo, setTipo] = useState('');
       const [mes, setMes] = useState('');
       const [dia, setDia] = useState('');
-      const [tipo, setTipo] = useState('');
-      const [notifPerm, setNotifPerm] = useState(Notification.permission);
-      const [toast, setToast] = useState({ msg:'', visible:false });
-      const [loading, setLoading] = useState(true);
-      const toastTimer = useRef(null);
 
       useEffect(() => {
-        registerServiceWorker();
+        // Registrar Service Worker
+        if ('serviceWorker' in navigator) {
+          navigator.serviceWorker.register('./sw.js')
+            .then(reg => console.log("SW Activo"))
+            .catch(err => console.error("SW Error", err));
+        }
+
+        // Leer datos de Firebase
         const unsub = db.collection('eventos').onSnapshot(snap => {
-          const fbEvents = snap.docs.map(d => ({ docId: d.id, ...d.data() }));
-          setEvents(fbEvents);
-          saveEvents(fbEvents);
+          const data = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+          setEvents(data);
           setLoading(false);
-          syncEventsToSW(fbEvents);
+          // Enviar eventos al SW para notificaciones
+          if (navigator.serviceWorker.controller) {
+            navigator.serviceWorker.controller.postMessage({ type: 'SET_EVENTS', events: data });
+          }
         });
         return () => unsub();
       }, []);
 
-      const showToast = useCallback((msg) => {
-        clearTimeout(toastTimer.current);
-        setToast({ msg, visible: true });
-        toastTimer.current = setTimeout(() => setToast({ msg: '', visible: false }), 2800);
-      }, []);
+      const pedirPermiso = async () => {
+        const res = await Notification.requestPermission();
+        if (res === 'granted') alert("Notificaciones activadas ✦");
+      };
 
-      const sorted = [...events].sort((a,b) => daysUntil(a.fecha) - daysUntil(b.fecha));
-
-      async function handleSave() {
-        if (!nombre.trim() || !mes || !dia || !tipo) { showToast('Completa todos los campos'); return; }
+      const handleSave = async () => {
+        if (!nombre || !tipo || !mes || !dia) return alert("Completa los datos");
         const fecha = `${String(mes).padStart(2,'0')}-${String(dia).padStart(2,'0')}`;
-        const ev = { id: Date.now(), nombre: nombre.trim(), fecha, tipo };
-        await saveEventToFirebase(ev);
-        showToast('Evento registrado ✦');
-        setNombre(''); setMes(''); setDia(''); setTipo('');
-      }
+        await db.collection('eventos').add({ nombre, tipo, fecha });
+        setNombre(''); setTipo(''); setMes(''); setDia('');
+      };
 
-      async function handleDelete(id) {
-        const ev = events.find(e => (e.id === id) || (e.docId === id));
-        if (ev) await deleteEventFromFirebase(ev);
-        showToast('Evento eliminado');
-      }
+      const borrar = async (id) => {
+        await db.collection('eventos').doc(id).delete();
+      };
 
-      async function handleNotify() {
-        const perm = await Notification.requestPermission();
-        setNotifPerm(perm);
-        if (perm === 'granted') {
-          syncEventsToSW(events);
-          showToast('Notificaciones activas ✦');
-        }
-      }
-
-      if (loading) return <div className="min-h-screen bg-navy flex items-center justify-center text-gold font-cinzel">Cargando...</div>;
+      if (loading) return <div className="p-20 text-center font-cinzel text-gold">Cargando...</div>;
 
       return (
-        <div className="max-w-lg mx-auto p-4 pb-20">
-          <header className="py-6 text-center">
-            <h1 className="font-cinzel text-2xl text-gold tracking-widest">Oriente Fraterno</h1>
+        <div className="max-w-md mx-auto p-4">
+          <header className="text-center py-8">
+            <h1 className="font-cinzel text-2xl text-gold tracking-widest uppercase">Oriente Fraterno</h1>
           </header>
 
-          <Card className="p-4 mb-6">
-            <div className="flex items-center justify-between mb-4">
-               <h2 className="font-cinzel text-gold text-sm tracking-widest">Activar Avisos</h2>
-               <button onClick={handleNotify} className={`p-2 rounded-full border ${notifPerm === 'granted' ? 'border-green-500 text-green-500' : 'border-gold text-gold'}`}>
-                 <Icon name={notifPerm === 'granted' ? "Bell" : "BellOff"} />
-               </button>
-            </div>
-          </Card>
+          <button onClick={pedirPermiso} className="w-full mb-6 p-3 border gold-border text-gold font-cinzel flex items-center justify-center gap-2 rounded">
+            <Icon name="Bell" /> ACTIVAR NOTIFICACIONES
+          </button>
 
-          <Card className="p-4 mb-6">
-            <input value={nombre} onChange={e => setNombre(e.target.value)} placeholder="Nombre del Hermano" className="w-full bg-navy border gold-border p-2 rounded mb-3 text-white focus:outline-none focus:border-gold" />
-            <div className="grid grid-cols-2 gap-2 mb-3">
-              <select value={mes} onChange={e => setMes(e.target.value)} className="bg-navy border gold-border p-2 rounded text-white">
+          <div className="bg-slate-900/50 p-4 rounded-lg border gold-border mb-8">
+            <input placeholder="Nombre" className="w-full bg-transparent border-b gold-border p-2 mb-4 outline-none" 
+              value={nombre} onChange={e => setNombre(e.target.value)} />
+            
+            <div className="grid grid-cols-2 gap-2 mb-4">
+              <select className="bg-navy border gold-border p-2 rounded" value={mes} onChange={e => setMes(e.target.value)}>
                 <option value="">Mes</option>
-                {[...Array(12)].map((_, i) => <option key={i+1} value={i+1}>{i+1}</option>)}
+                {Array.from({length:12}, (_,i)=> <option key={i+1} value={i+1}>{i+1}</option>)}
               </select>
-              <select value={dia} onChange={e => setDia(e.target.value)} className="bg-navy border gold-border p-2 rounded text-white">
+              <select className="bg-navy border gold-border p-2 rounded" value={dia} onChange={e => setDia(e.target.value)}>
                 <option value="">Día</option>
-                {[...Array(31)].map((_, i) => <option key={i+1} value={i+1}>{i+1}</option>)}
+                {Array.from({length:31}, (_,i)=> <option key={i+1} value={i+1}>{i+1}</option>)}
               </select>
             </div>
-            <select value={tipo} onChange={e => setTipo(e.target.value)} className="w-full bg-navy border gold-border p-2 rounded mb-4 text-white">
+
+            <select className="w-full bg-navy border gold-border p-2 rounded mb-4" value={tipo} onChange={e => setTipo(e.target.value)}>
               <option value="">Tipo de Evento</option>
-              {TIPOS.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
+              <option value="Cumpleaños">Cumpleaños</option>
+              <option value="Aniversario">Aniversario</option>
+              <option value="Pasaje al Oriente Eterno">Pasaje al Oriente Eterno</option>
             </select>
-            <button onClick={handleSave} className="w-full bg-gold text-navy font-cinzel py-2 rounded hover:bg-gold-light transition-colors">Registrar</button>
-          </Card>
 
-          <Divider label="Próximos Eventos" />
-
-          <div className="space-y-3">
-            {sorted.map(ev => {
-              const days = daysUntil(ev.fecha);
-              return (
-                <div key={ev.id} className={`flex items-center justify-between p-3 rounded border ${TIPO_STYLES[ev.tipo] || 'border-gold/20'}`}>
-                  <div>
-                    <div className="font-bold">{ev.nombre}</div>
-                    <div className="text-xs opacity-70">{ev.tipo} • {ev.fecha.split('-').reverse().join('/')}</div>
-                  </div>
-                  <div className="flex items-center gap-3">
-                    <span className="text-xs font-cinzel text-gold">{days === 0 ? '¡HOY!' : `En ${days} días`}</span>
-                    <button onClick={() => handleDelete(ev.docId || ev.id)} className="text-red-400"><Icon name="Trash2" size={14} /></button>
-                  </div>
-                </div>
-              );
-            })}
+            <button onClick={handleSave} className="w-full bg-gold text-navy font-bold py-2 rounded">GUARDAR</button>
           </div>
-          <Toast message={toast.msg} visible={toast.visible} />
+
+          <div className="space-y-4">
+            {events.map(ev => (
+              <div key={ev.id} className="flex justify-between items-center p-3 border-l-2 border-gold bg-slate-900/30">
+                <div>
+                  <div className="font-bold">{ev.nombre}</div>
+                  <div className="text-xs text-gold/60">{ev.tipo} • {ev.fecha}</div>
+                </div>
+                <button onClick={() => borrar(ev.id)} className="text-red-900/50 hover:text-red-500">
+                  <Icon name="Trash2" size={16} />
+                </button>
+              </div>
+            ))}
+          </div>
         </div>
       );
     }
-    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
-</script>
+
+    const root = ReactDOM.createRoot(document.getElementById('root'));
+    root.render(<App />);
+  </script>
+</body>
+</html>
