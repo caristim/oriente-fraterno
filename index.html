@@ -1,45 +1,90 @@
-async function handleNotify() {
-  if (!('Notification' in window)) {
-    showToast('Navegador no soportado');
-    return;
-  }
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Registro Eventos · Oriente Fraterno</title>
 
-  if (!window.isSecureContext) {
-    showToast('Se requiere HTTPS');
-    return;
-  }
+  <meta name="theme-color" content="#0f172a" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-title" content="Oriente Fraterno" />
 
-  try {
-    const registration = await navigator.serviceWorker.ready;
+  <!-- Tailwind -->
+  <script>window.tailwindConfig=undefined;</script>
+  <script src="https://cdn.tailwindcss.com"></script>
 
-    if (!registration) {
-      showToast('Service Worker no listo');
-      return;
+  <!-- React -->
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+
+  <!-- Babel -->
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <!-- Icons -->
+  <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+
+  <!-- Firebase -->
+  <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-messaging-compat.js"></script>
+
+  <script>
+    const firebaseConfig = {
+      apiKey: "AIzaSyD9gQW61AvKHhNai6gljNFE7q9rS7KKuN8",
+      authDomain: "orientefraterno148-2a0c1.firebaseapp.com",
+      projectId: "orientefraterno148-2a0c1",
+      storageBucket: "orientefraterno148-2a0c1.firebasestorage.app",
+      messagingSenderId: "101867774014",
+      appId: "1:101867774014:web:0b4bb797293910c419716f"
+    };
+
+    firebase.initializeApp(firebaseConfig);
+    const db = firebase.firestore();
+  </script>
+</head>
+
+<body class="bg-slate-950 text-white">
+  <div id="root"></div>
+
+  <!-- 🔔 NOTIFICACIONES (AGREGADO) -->
+  <script>
+    const messaging = firebase.messaging();
+
+    if ('serviceWorker' in navigator) {
+      navigator.serviceWorker.register('./firebase-messaging-sw.js')
+        .then((registration) => {
+
+          messaging.useServiceWorker(registration);
+
+          Notification.requestPermission().then((permission) => {
+            if (permission === "granted") {
+
+              messaging.getToken({
+                vapidKey: "REEMPLAZAR_CON_TU_VAPID_KEY"
+              }).then((token) => {
+                if (token) {
+                  console.log("TOKEN:", token);
+                }
+              });
+
+            }
+          });
+
+        });
     }
 
-    if (Notification.permission === 'granted') {
-      showToast('Notificaciones ya activas ✦');
-      return;
-    }
+    messaging.onMessage((payload) => {
+      new Notification(payload.notification.title, {
+        body: payload.notification.body,
+        icon: "/icon-192.png"
+      });
+    });
+  </script>
 
-    if (Notification.permission === 'denied') {
-      showToast('Permiso bloqueado');
-      return;
-    }
+  <!-- TU APP (SIN CAMBIOS) -->
+  <script type="text/babel">
+    // 👇 TODO TU CÓDIGO ORIGINAL AQUÍ (NO MODIFICADO)
+  </script>
 
-    const perm = await Notification.requestPermission();
-    setNotifPerm(perm);
-
-    if (perm === 'granted') {
-      events.forEach(scheduleNotification);
-      await syncEventsToSW(events);
-      showToast('Notificaciones activadas ✦');
-    } else {
-      showToast('Permiso denegado');
-    }
-
-  } catch (err) {
-    console.error(err);
-    showToast('Error al activar notificaciones');
-  }
-}
+</body>
+</html>
