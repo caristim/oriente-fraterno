@@ -4,164 +4,73 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Registro Eventos · Oriente Fraterno</title>
+
   <meta name="theme-color" content="#0f172a" />
-  
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-title" content="Oriente Fraterno" />
+
+  <!-- Tailwind -->
   <script src="https://cdn.tailwindcss.com"></script>
+
+  <!-- React -->
   <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+
+  <!-- Babel -->
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-  <script src="https://unpkg.com/lucide@latest"></script>
 
-  <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
-  <script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore-compat.js"></script>
+  <!-- Icons -->
+  <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
 
-  <style>
-    @import url('https://fonts.googleapis.com/css2?family=Cinzel:wght@400;700&family=Inter:wght@300;400;600&display=swap');
-    :root { --gold: #c5a059; --navy: #0f172a; }
-    body { background-color: var(--navy); color: white; font-family: 'Inter', sans-serif; }
-    .font-cinzel { font-family: 'Cinzel', serif; }
-    .gold-border { border-color: rgba(197, 160, 89, 0.3); }
-  </style>
-</head>
-<body>
-  <div id="root">
-    <div class="flex items-center justify-center min-h-screen font-cinzel text-gold">
-      Iniciando Templo...
-    </div>
-  </div>
+  <!-- Firebase (SE MANTIENE SOLO LO QUE YA USABAS) -->
+  <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore-compat.js"></script>
 
-  <script type="text/babel">
-    const { useState, useEffect, useCallback, useRef } = React;
-
-    // --- CONFIGURACIÓN FIREBASE ---
+  <script>
     const firebaseConfig = {
-      apiKey: "AIzaSyAs-TU-API-KEY",
-      authDomain: "oriente-fraterno.firebaseapp.com",
-      projectId: "oriente-fraterno",
-      storageBucket: "oriente-fraterno.appspot.com",
-      messagingSenderId: "931215446059",
-      appId: "1:931215446059:web:78c187515f482d8d85f838"
+      apiKey: "AIzaSyD9gQW61AvKHhNai6gljNFE7q9rS7KKuN8",
+      authDomain: "orientefraterno148-2a0c1.firebaseapp.com",
+      projectId: "orientefraterno148-2a0c1",
+      storageBucket: "orientefraterno148-2a0c1.firebasestorage.app",
+      messagingSenderId: "101867774014",
+      appId: "1:101867774014:web:0b4bb797293910c419716f"
     };
 
-    if (!firebase.apps.length) firebase.initializeApp(firebaseConfig);
+    firebase.initializeApp(firebaseConfig);
     const db = firebase.firestore();
-
-    // --- COMPONENTES ---
-    const Icon = ({ name, size = 18 }) => {
-      const ref = useRef(null);
-      useEffect(() => {
-        if (ref.current && window.lucide) {
-          ref.current.innerHTML = '';
-          const icon = lucide.createElement(lucide[name] || lucide.HelpCircle);
-          icon.setAttribute('width', size);
-          icon.setAttribute('height', size);
-          ref.current.appendChild(icon);
-        }
-      }, [name, size]);
-      return <span ref={ref} className="inline-flex" />;
-    };
-
-    function App() {
-      const [events, setEvents] = useState([]);
-      const [loading, setLoading] = useState(true);
-      const [nombre, setNombre] = useState('');
-      const [tipo, setTipo] = useState('');
-      const [mes, setMes] = useState('');
-      const [dia, setDia] = useState('');
-
-      useEffect(() => {
-        // Registrar Service Worker
-        if ('serviceWorker' in navigator) {
-          navigator.serviceWorker.register('./sw.js')
-            .then(reg => console.log("SW Activo"))
-            .catch(err => console.error("SW Error", err));
-        }
-
-        // Leer datos de Firebase
-        const unsub = db.collection('eventos').onSnapshot(snap => {
-          const data = snap.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-          setEvents(data);
-          setLoading(false);
-          // Enviar eventos al SW para notificaciones
-          if (navigator.serviceWorker.controller) {
-            navigator.serviceWorker.controller.postMessage({ type: 'SET_EVENTS', events: data });
-          }
-        });
-        return () => unsub();
-      }, []);
-
-      const pedirPermiso = async () => {
-        const res = await Notification.requestPermission();
-        if (res === 'granted') alert("Notificaciones activadas ✦");
-      };
-
-      const handleSave = async () => {
-        if (!nombre || !tipo || !mes || !dia) return alert("Completa los datos");
-        const fecha = `${String(mes).padStart(2,'0')}-${String(dia).padStart(2,'0')}`;
-        await db.collection('eventos').add({ nombre, tipo, fecha });
-        setNombre(''); setTipo(''); setMes(''); setDia('');
-      };
-
-      const borrar = async (id) => {
-        await db.collection('eventos').doc(id).delete();
-      };
-
-      if (loading) return <div className="p-20 text-center font-cinzel text-gold">Cargando...</div>;
-
-      return (
-        <div className="max-w-md mx-auto p-4">
-          <header className="text-center py-8">
-            <h1 className="font-cinzel text-2xl text-gold tracking-widest uppercase">Oriente Fraterno</h1>
-          </header>
-
-          <button onClick={pedirPermiso} className="w-full mb-6 p-3 border gold-border text-gold font-cinzel flex items-center justify-center gap-2 rounded">
-            <Icon name="Bell" /> ACTIVAR NOTIFICACIONES
-          </button>
-
-          <div className="bg-slate-900/50 p-4 rounded-lg border gold-border mb-8">
-            <input placeholder="Nombre" className="w-full bg-transparent border-b gold-border p-2 mb-4 outline-none" 
-              value={nombre} onChange={e => setNombre(e.target.value)} />
-            
-            <div className="grid grid-cols-2 gap-2 mb-4">
-              <select className="bg-navy border gold-border p-2 rounded" value={mes} onChange={e => setMes(e.target.value)}>
-                <option value="">Mes</option>
-                {Array.from({length:12}, (_,i)=> <option key={i+1} value={i+1}>{i+1}</option>)}
-              </select>
-              <select className="bg-navy border gold-border p-2 rounded" value={dia} onChange={e => setDia(e.target.value)}>
-                <option value="">Día</option>
-                {Array.from({length:31}, (_,i)=> <option key={i+1} value={i+1}>{i+1}</option>)}
-              </select>
-            </div>
-
-            <select className="w-full bg-navy border gold-border p-2 rounded mb-4" value={tipo} onChange={e => setTipo(e.target.value)}>
-              <option value="">Tipo de Evento</option>
-              <option value="Cumpleaños">Cumpleaños</option>
-              <option value="Aniversario">Aniversario</option>
-              <option value="Pasaje al Oriente Eterno">Pasaje al Oriente Eterno</option>
-            </select>
-
-            <button onClick={handleSave} className="w-full bg-gold text-navy font-bold py-2 rounded">GUARDAR</button>
-          </div>
-
-          <div className="space-y-4">
-            {events.map(ev => (
-              <div key={ev.id} className="flex justify-between items-center p-3 border-l-2 border-gold bg-slate-900/30">
-                <div>
-                  <div className="font-bold">{ev.nombre}</div>
-                  <div className="text-xs text-gold/60">{ev.tipo} • {ev.fecha}</div>
-                </div>
-                <button onClick={() => borrar(ev.id)} className="text-red-900/50 hover:text-red-500">
-                  <Icon name="Trash2" size={16} />
-                </button>
-              </div>
-            ))}
-          </div>
-        </div>
-      );
-    }
-
-    const root = ReactDOM.createRoot(document.getElementById('root'));
-    root.render(<App />);
   </script>
+</head>
+
+<body class="bg-slate-950 text-white">
+  <div id="root"></div>
+
+  <!-- 🔔 NOTIFICACIONES SIMPLES (ESTABLES) -->
+  <script>
+    if ("Notification" in window) {
+      Notification.requestPermission().then((permission) => {
+        if (permission === "granted") {
+          console.log("Notificaciones activadas");
+
+          // Notificación de prueba
+          new Notification("Oriente Fraterno", {
+            body: "Notificaciones funcionando correctamente",
+            icon: "/icon-192.png"
+          });
+
+        } else {
+          console.log("Permiso denegado");
+        }
+      });
+    }
+  </script>
+
+  <!-- TU APP ORIGINAL (NO TOCADA) -->
+  <script type="text/babel">
+
+    // ⚠️ AQUÍ PEGA EXACTAMENTE TU CÓDIGO ACTUAL
+    // (NO LO MODIFIQUES)
+
+  </script>
+
 </body>
 </html>
