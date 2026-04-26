@@ -96,7 +96,30 @@
     ::-webkit-scrollbar-track { background:#0f172a; }
     ::-webkit-scrollbar-thumb { background:#7a6128; border-radius:3px; }
   </style>
-  <link rel="manifest" href="./manifest.json" />
+  <script>
+    // Manifest inyectado como blob para evitar problemas de CORS y rutas en hosting
+    (function() {
+      const manifestData = {
+        name: "Oriente Fraterno 148",
+        short_name: "OF 148",
+        description: "Registro de Eventos - Logia Oriente Fraterno N° 148",
+        start_url: "./",
+        display: "standalone",
+        background_color: "#0f172a",
+        theme_color: "#0f172a",
+        orientation: "portrait",
+        icons: [
+          { src: "./icon-192.png", sizes: "192x192", type: "image/png", purpose: "any" },
+          { src: "./icon-512.png", sizes: "512x512", type: "image/png", purpose: "any maskable" }
+        ]
+      };
+      const blob = new Blob([JSON.stringify(manifestData)], { type: 'application/manifest+json' });
+      const link = document.createElement('link');
+      link.rel  = 'manifest';
+      link.href = URL.createObjectURL(blob);
+      document.head.appendChild(link);
+    })();
+  </script>
 </head>
 <body class="bg-navy text-white bg-grid min-h-screen">
   <div id="root"></div>
