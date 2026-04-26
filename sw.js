@@ -1,97 +1,55 @@
-const DB_KEY = 'of_scheduled';
+// Service Worker para Oriente Fraterno
+const CACHE_NAME = 'of-cache-v1';
 
-// Persistencia con IndexedDB
-async function getScheduled() {
-  return new Promise(res => {
-    const req = indexedDB.open('of_sw', 1);
-    req.onupgradeneeded = e => e.target.result.createObjectStore('kv');
-    req.onsuccess = e => {
-      const db = e.target.result;
-      const tx = db.transaction('kv','readonly');
-      const r  = tx.objectStore('kv').get(DB_KEY);
-      r.onsuccess = () => res(new Set(r.result || []));
-      r.onerror   = () => res(new Set());
-    };
-    req.onerror = () => res(new Set());
-  });
-}
-
-async function saveScheduled(set) {
-  return new Promise(res => {
-    const req = indexedDB.open('of_sw', 1);
-    req.onsuccess = e => {
-      const db = e.target.result;
-      const tx = db.transaction('kv','readwrite');
-      tx.objectStore('kv').put([...set], DB_KEY);
-      tx.oncomplete = res;
-    };
-    req.onerror = res;
-  });
-}
-
-self.addEventListener('install', () => self.skipWaiting());
-self.addEventListener('activate', e => e.waitUntil(self.clients.claim()));
-
-// Recibir eventos desde la App
-self.addEventListener('message', async e => {
-  if (e.data?.type !== 'SCHEDULE_EVENTS') return;
-  const events = e.data.events || [];
-  
-  const req = indexedDB.open('of_sw', 1);
-  req.onsuccess = ev => {
-    const db = ev.target.result;
-    const tx = db.transaction('kv','readwrite');
-    tx.objectStore('kv').put(events, 'events');
-  };
+self.addEventListener('install', (event) => {
+  self.skipWaiting();
 });
 
-// Verificación de notificaciones
-async function checkAndNotify() {
-  const events = await new Promise(res => {
-    const req = indexedDB.open('of_sw', 1);
-    req.onsuccess = e => {
+self.addEventListener('activate', (event) => {
+  event.waitUntil(self.clients.claim());
+});
+
+// Escuchar mensajes de la App para actualizar eventos
+self.addEventListener('message', (event) => {
+  if (event.data && event.data.type === 'SET_EVENTS') {
+    // Guardamos los eventos en IndexedDB para acceso offline del SW
+    const request = indexedDB.open('OF_DB', 1);
+    request.onupgradeneeded = (e) => e.target.result.createObjectStore('store');
+    request.onsuccess = (e) => {
       const db = e.target.result;
-      const tx = db.transaction('kv','readonly');
-      const r  = tx.objectStore('kv').get('events');
-      r.onsuccess = () => res(r.result || []);
-      r.onerror   = () => res([]);
+      db.transaction('store', 'readwrite').objectStore('store').put(event.data.events, 'events_list');
     };
-    req.onerror = () => res([]);
-  });
-
-  const now = new Date();
-  const todayStr = `${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`;
-  const fired = await getScheduled();
-
-  for (const ev of events) {
-    const key = `of-fired-${ev.id}-${now.getFullYear()}`;
-    if (ev.fecha === todayStr && !fired.has(key)) {
-      fired.add(key);
-      await saveScheduled(fired);
-      
-      self.registration.showNotification('Oriente Fraterno ✦', {
-        body: `Hoy: ${ev.tipo} de ${ev.nombre}`,
-        icon: './icon-192.png',
-        badge: './icon-192.png',
-        tag: 'of-' + ev.id,
-        requireInteraction: true,
-        vibrate: [200, 100, 200]
-      });
-    }
   }
+});
+
+// Tarea de verificación de notificaciones
+async function checkNotifications() {
+  const request = indexedDB.open('OF_DB', 1);
+  request.onsuccess = async (e) => {
+    const db = e.target.result;
+    if (!db.objectStoreNames.contains('store')) return;
+    
+    const getEvents = db.transaction('store', 'readonly').objectStore('store').get('events_list');
+    getEvents.onsuccess = () => {
+      const events = getEvents.result || [];
+      const today = new Date();
+      const todayStr = `${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`;
+      
+      events.forEach(ev => {
+        if (ev.fecha === todayStr) {
+          self.registration.showNotification('Oriente Fraterno ✦', {
+            body: `Hoy: ${ev.tipo} de ${ev.nombre}`,
+            icon: './icon-192.png',
+            badge: './icon-192.png',
+            tag: `notif-${ev.id}-${todayStr}` // Evita repeticiones el mismo día
+          });
+        }
+      });
+    };
+  };
 }
 
-// Escuchar eventos de sincronización
-self.addEventListener('periodicsync', e => {
-  if (e.tag === 'of-daily-check') e.waitUntil(checkAndNotify());
-});
-
-// Fallback: verificar cuando el usuario abre la web
-self.addEventListener('fetch', e => {
-  e.waitUntil(checkAndNotify());
-});
-
-self.addEventListener('notificationclick', e => {
-  e.notification.close();
-  e.waitUntil(clients.openWindow('./'));
+// Intentar verificar al abrir o sincronizar
+self.addEventListener('fetch', (event) => {
+  event.waitUntil(checkNotifications());
 });
