@@ -125,13 +125,6 @@
     function saveEvents(l) { localStorage.setItem(STORAGE_KEY, JSON.stringify(l)); }
 
     // ── Firebase sync ──────────────────────────────────────────────
-    async function loadEventsFromFirebase() {
-      try {
-        const snap = await db.collection('eventos').orderBy('id', 'desc').get();
-        return snap.docs.map(d => d.data());
-      } catch(e) { return null; }
-    }
-
     async function saveEventToFirebase(ev) {
       try { await db.collection('eventos').doc(String(ev.id)).set(ev); } catch(e) { console.warn(e); }
     }
@@ -174,7 +167,25 @@
     async function registerServiceWorker() {
       if (!('serviceWorker' in navigator)) return null;
       try {
-        swRegistration = await navigator.serviceWorker.register('./sw.js', { scope: './' });
+        // Forzar actualización del SW si hay una versión nueva
+        swRegistration = await navigator.serviceWorker.register('./sw.js', { scope: './', updateViaCache: 'none' });
+
+        // Forzar activación inmediata si hay un SW esperando
+        if (swRegistration.waiting) {
+          swRegistration.waiting.postMessage({ type: 'SKIP_WAITING' });
+        }
+
+        // Escuchar nuevas instalaciones
+        swRegistration.addEventListener('updatefound', () => {
+          const newSW = swRegistration.installing;
+          if (newSW) {
+            newSW.addEventListener('statechange', () => {
+              if (newSW.state === 'installed' && navigator.serviceWorker.controller) {
+                newSW.postMessage({ type: 'SKIP_WAITING' });
+              }
+            });
+          }
+        });
 
         // Esperar a que el SW esté activo
         if (swRegistration.installing) {
@@ -188,13 +199,17 @@
           });
         }
 
-        // Periodic sync si está soportado
+        // Periodic sync si está soportado (Chrome Android, user engagement alto)
         if ('periodicSync' in swRegistration) {
           try {
-            await swRegistration.periodicSync.register('of-daily-check', {
-              minInterval: 6 * 60 * 60 * 1000
-            });
-          } catch (_) { /* periodicSync necesita user engagement score */ }
+            const status = await navigator.permissions.query({ name: 'periodic-background-sync' });
+            if (status.state === 'granted') {
+              await swRegistration.periodicSync.register('of-daily-check', {
+                minInterval: 12 * 60 * 60 * 1000 // 12 horas
+              });
+              console.log('[App] periodicSync registrado');
+            }
+          } catch (_) { /* periodicSync puede no estar disponible */ }
         }
 
         return swRegistration;
@@ -205,8 +220,9 @@
     }
 
     function waitForActiveSW(reg, timeoutMs = 5000) {
-      if (reg.active) return Promise.resolve(reg.active);
+      if (reg && reg.active) return Promise.resolve(reg.active);
       return new Promise((resolve) => {
+        if (!reg) { resolve(null); return; }
         const timer = setTimeout(() => resolve(null), timeoutMs);
         const checkState = (sw) => {
           sw.addEventListener('statechange', function handler() {
@@ -232,30 +248,14 @@
         const sw = await waitForActiveSW(reg, 5000);
         if (!sw) { console.warn('[App] SW no disponible para sync'); return; }
         sw.postMessage({ type: 'SCHEDULE_EVENTS', events });
+        console.log('[App] eventos enviados al SW:', events.length);
+
+        // También registrar Background Sync (one-shot) como respaldo
+        if ('sync' in reg) {
+          try { await reg.sync.register('of-check'); } catch (_) {}
+        }
       } catch (err) {
         console.warn('[App] syncEventsToSW error:', err);
-      }
-    }
-
-    // ── Legacy fallback: setTimeout para eventos próximos (<24 días) ──
-    function scheduleNotification(ev) {
-      if (Notification.permission !== 'granted') return;
-      const today = new Date(); today.setHours(0,0,0,0);
-      const [,m,d] = ev.fecha.split('-').length === 2
-        ? ['', ...ev.fecha.split('-')]
-        : ev.fecha.split('-');
-      let target = new Date(today.getFullYear(), +m - 1, +d, 9, 0, 0);
-      if (target < new Date()) target.setFullYear(target.getFullYear() + 1);
-      const delay = target - Date.now();
-      if (delay > 0 && delay < 2147483647) {
-        setTimeout(() => {
-          new Notification('Oriente Fraterno ✦', {
-            body: `Hoy: ${ev.tipo} de ${ev.nombre}`,
-            tag: 'of-' + ev.id,
-            icon: './icon-192.png',
-            requireInteraction: true,
-          });
-        }, delay);
       }
     }
 
@@ -323,6 +323,17 @@
       const [loading, setLoading]     = useState(true);
       const toastTimer = useRef(null);
 
+      // Registrar SW al montar (antes de cargar Firebase)
+      useEffect(() => {
+        registerServiceWorker().then(reg => {
+          // Si ya tiene permiso, sincronizar eventos locales mientras carga Firebase
+          if (reg && Notification.permission === 'granted') {
+            const cached = loadEvents();
+            if (cached.length > 0) syncEventsToSW(cached);
+          }
+        });
+      }, []);
+
       // Cargar desde Firebase con listener en tiempo real
       useEffect(() => {
         const unsub = db.collection('eventos').onSnapshot(
@@ -344,9 +355,6 @@
         return () => unsub();
       }, []);
 
-      // Registrar SW al montar
-      useEffect(() => { registerServiceWorker(); }, []);
-
       const showToast = useCallback((msg) => {
         clearTimeout(toastTimer.current);
         setToast({ msg, visible: true });
@@ -364,9 +372,9 @@
         const fecha = `${mesStr}-${diaStr}`;
         const ev = { id: Date.now(), nombre: nombre.trim(), fecha, tipo };
         await saveEventToFirebase(ev);
-        scheduleNotification(ev);
         setNombre(''); setMes(''); setDia(''); setTipo('');
         showToast('Evento registrado ✦');
+        // La sincronización con SW se hará automáticamente cuando Firebase actualice
       }
 
       async function handleDelete(id) {
@@ -386,7 +394,6 @@
         const perm = await Notification.requestPermission();
         setNotifPerm(perm);
         if (perm === 'granted') {
-          events.forEach(scheduleNotification);
           await syncEventsToSW(events);
           showToast('Notificaciones activadas ✦');
         } else {
@@ -440,7 +447,7 @@
               </button>
               <p className="text-center text-gold/50 text-xs italic mt-2 tracking-wide">
                 {notifGranted
-                  ? 'Service Worker activo · Recibirás alertas en cada fecha ✦'
+                  ? 'Service Worker activo · Recibirás alertas a las 9:00 AM en cada fecha ✦'
                   : 'Activa para recibir alertas a las 9:00 AM en cada fecha'}
               </p>
             </Card>
