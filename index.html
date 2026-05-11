@@ -55,9 +55,7 @@
     // Reemplazá VAPID_KEY_HERE con tu clave de Firebase Console:
     //   Firebase Console → Project Settings → Cloud Messaging
     //   → Web Push certificates → Generate key pair → copiá el valor
-    const FCM_VAPID_KEY = 'BM1SqlyjKhW45Y2JSBqDTYRT5QBV0yduJBtonc_QrlqM1DgaDmanz_w1R0Qj40ZuiG-rz4s4stIqBuYmciutG9Y'
-
-;
+    const FCM_VAPID_KEY = 'BM1SqlyjKhW45Y2JSBqDTYRT5QBV0yduJBtonc_QrlqM1DgaDmanz_w1R0Qj40ZuiG-rz4s4stIqBuYmciutG9Y';
 
     let messaging = null;
 
@@ -72,11 +70,12 @@
       }
       try {
         messaging = firebase.messaging();
-        // Indicarle al SDK de FCM que use nuestro sw.js ya registrado.
-        // Esto evita que FCM busque un firebase-messaging-sw.js separado.
-        messaging.useServiceWorker(swRegistration);
-
-        const token = await messaging.getToken({ vapidKey: FCM_VAPID_KEY });
+        // Pasamos el SW ya registrado directamente en getToken.
+        // Esto reemplaza el método useServiceWorker que fue eliminado en Firebase 10+.
+        const token = await messaging.getToken({
+          vapidKey: FCM_VAPID_KEY,
+          serviceWorkerRegistration: swRegistration,
+        });
         if (token) {
           console.log('[FCM] token registrado');
           await db.collection('fcm_tokens').doc(token).set({
