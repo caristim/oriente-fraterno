@@ -1,0 +1,29 @@
+name: Notificaciones 9AM
+
+on:
+  schedule:
+    # 12:00 UTC = 09:00 AM Uruguay (UTC-3)
+    # En horario de verano Uruguay pasa a UTC-2, pero 12:00 UTC = 10:00 AM
+    # Para cubrir ambos casos se puede ajustar a 11:00 UTC si se prefiere.
+    - cron: '0 12 * * *'
+  workflow_dispatch:  # permite ejecutarlo manualmente desde GitHub para probar
+
+jobs:
+  notificar:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Descargar repositorio
+        uses: actions/checkout@v4
+
+      - name: Instalar Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Instalar dependencias
+        run: npm install
+
+      - name: Enviar notificaciones
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+        run: node notify.js
