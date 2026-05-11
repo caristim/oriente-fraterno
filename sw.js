@@ -1,10 +1,54 @@
 // ── Oriente Fraterno 148 · Service Worker ─────────────────────────────────
-// v4 — notificaciones confiables en Android/Chrome
-// Estrategia: alarma interna a las 9:00 AM + IndexedDB + check en activate/sync/fetch
+// v6 — Firebase Messaging integrado directamente aquí.
+// Un solo SW maneja todo: push FCM y notificaciones locales de respaldo.
+// NO se usa firebase-messaging-sw.js separado (evita conflicto de scope).
 
-const SW_VERSION = 'of-sw-v4';
+importScripts('https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js');
+importScripts('https://www.gstatic.com/firebasejs/10.8.0/firebase-messaging-compat.js');
+
+const SW_VERSION = 'of-sw-v6';
 const DB_NAME    = 'of_sw';
 const DB_VERSION = 1;
+
+// ── Firebase Messaging dentro del SW ──────────────────────────────────────
+// Al inicializar Firebase aquí, este SW puede recibir mensajes push de FCM
+// aunque la app esté completamente cerrada en el smartphone.
+
+firebase.initializeApp({
+  apiKey:            'AIzaSyD9gQW61AvKHhNai6gljNFE7q9rS7KKuN8',
+  authDomain:        'orientefraterno148-2a0c1.firebaseapp.com',
+  projectId:         'orientefraterno148-2a0c1',
+  storageBucket:     'orientefraterno148-2a0c1.firebasestorage.app',
+  messagingSenderId: '101867774014',
+  appId:             '1:101867774014:web:0b4bb797293910c419716f',
+});
+
+const fcmMessaging = firebase.messaging();
+
+// Handler para mensajes push recibidos con la app cerrada o en background.
+// FCM muestra la notificación automáticamente cuando el payload incluye
+// notification.title y notification.body (que es lo que envía Cloud Functions).
+// Este handler es obligatorio para que el SW procese el mensaje correctamente.
+fcmMessaging.onBackgroundMessage(payload => {
+  console.log('[SW-FCM] push en background:', payload);
+
+  // Si ya viene con notification.title, FCM lo muestra solo — no hacemos nada más.
+  if (payload.notification && payload.notification.title) return;
+
+  // Fallback: si solo viene data (sin notification), mostramos manualmente.
+  const title = (payload.data && payload.data.title) || 'Oriente Fraterno ✦';
+  const body  = (payload.data && payload.data.body)  || 'Hoy hay un evento registrado';
+
+  return self.registration.showNotification(title, {
+    body,
+    icon:               './icon-192.png',
+    badge:              './icon-192.png',
+    requireInteraction: true,
+    vibrate:            [200, 100, 200, 100, 200],
+    tag:                'of-fcm-bg',
+    actions: [{ action: 'open', title: 'Ver app' }],
+  });
+});
 
 // ── IndexedDB helpers ──────────────────────────────────────────────────────
 
@@ -40,36 +84,6 @@ async function dbSet(key, value) {
   });
 }
 
-// ── Alarma interna: programa un setTimeout hasta las 9:00 AM ──────────────
-// Este es el mecanismo principal que permite notificar aunque la app esté
-// cerrada (mientras Chrome/Android mantenga el SW vivo — instalado como PWA).
-
-let _alarmTimer = null;
-
-function scheduleNextCheck() {
-  if (_alarmTimer) {
-    clearTimeout(_alarmTimer);
-    _alarmTimer = null;
-  }
-
-  const now    = new Date();
-  const next9  = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 9, 0, 0, 0);
-
-  // Si las 9 AM ya pasaron hoy, programar para mañana
-  if (next9 <= now) {
-    next9.setDate(next9.getDate() + 1);
-  }
-
-  const delay = next9 - now;
-  console.log('[SW] próxima alarma en', Math.round(delay / 60000), 'minutos (', next9.toLocaleString(), ')');
-
-  _alarmTimer = setTimeout(async () => {
-    console.log('[SW] alarma de las 9 AM disparada');
-    await checkAndNotify();
-    scheduleNextCheck(); // re-programar para el día siguiente
-  }, delay);
-}
-
 // ── Lifecycle ──────────────────────────────────────────────────────────────
 
 self.addEventListener('install', () => {
@@ -81,13 +95,12 @@ self.addEventListener('activate', e => {
   console.log('[SW] activate', SW_VERSION);
   e.waitUntil(
     self.clients.claim().then(async () => {
-      await checkAndNotify(); // verificar por si HOY hay algo
-      scheduleNextCheck();    // programar alarma de las 9 AM
+      await checkAndNotify();
     })
   );
 });
 
-// ── Recibir eventos desde la app ───────────────────────────────────────────
+// ── Mensajes desde la app ──────────────────────────────────────────────────
 
 self.addEventListener('message', async e => {
   if (!e.data) return;
@@ -96,8 +109,7 @@ self.addEventListener('message', async e => {
     const events = e.data.events || [];
     await dbSet('events', events);
     console.log('[SW] eventos almacenados:', events.length);
-    await checkAndNotify();  // verificar por si HOY hay algo
-    scheduleNextCheck();     // (re)programar alarma
+    await checkAndNotify();
   }
 
   if (e.data.type === 'PING') {
@@ -109,33 +121,26 @@ self.addEventListener('message', async e => {
   }
 });
 
-// ── Background Sync (Periodic) ─────────────────────────────────────────────
+// ── Background Sync (respaldo adicional) ──────────────────────────────────
 
 self.addEventListener('periodicsync', e => {
   if (e.tag === 'of-daily-check') {
-    console.log('[SW] periodicsync disparado');
     e.waitUntil(checkAndNotify());
   }
 });
 
-// ── Background Sync (one-shot, fallback) ──────────────────────────────────
-
 self.addEventListener('sync', e => {
   if (e.tag === 'of-check') {
-    console.log('[SW] sync disparado');
     e.waitUntil(checkAndNotify());
   }
 });
 
 // ── Fetch ──────────────────────────────────────────────────────────────────
-// Activar check cuando el usuario abre la app (navegación), sin romper la red.
 
 self.addEventListener('fetch', e => {
   if (e.request.mode === 'navigate') {
     checkAndNotify().catch(console.warn);
-    scheduleNextCheck(); // asegurarse de que la alarma siga activa
   }
-  // Pass-through: sin cache propio, red normal
   e.respondWith(
     fetch(e.request).catch(() => new Response('Sin conexión', { status: 503 }))
   );
@@ -155,7 +160,10 @@ self.addEventListener('notificationclick', e => {
   );
 });
 
-// ── Lógica central: verificar fechas y disparar notificaciones ─────────────
+// ── Check local (respaldo para cuando el usuario abre la app) ─────────────
+// La notificación principal a las 9 AM viene del push de Cloud Functions.
+// Este check actúa de respaldo: si el usuario abre la app el día del evento
+// y el push no llegó (sin internet en ese momento, etc.), igual avisa.
 
 async function checkAndNotify() {
   try {
@@ -171,7 +179,6 @@ async function checkAndNotify() {
     for (const ev of events) {
       if (!ev.fecha || !ev.nombre || !ev.tipo) continue;
 
-      // Parsear fecha MM-DD o YYYY-MM-DD
       const parts = String(ev.fecha).split('-');
       let month, day;
       if (parts.length === 2) {
@@ -183,38 +190,30 @@ async function checkAndNotify() {
       }
       if (!month || !day) continue;
 
-      const evDay = new Date(now.getFullYear(), month - 1, day);
-
+      const evDay   = new Date(now.getFullYear(), month - 1, day);
       const isToday = evDay.getTime() === today.getTime();
       if (!isToday) continue;
 
-      // Clave única por evento y año para no notificar dos veces
       const evId    = ev.docId || ev.id || `${ev.nombre}-${ev.fecha}`;
       const fireKey = `${evId}-${now.getFullYear()}`;
       if (fired[fireKey]) continue;
 
-      // Verificar que el permiso de notificación esté activo
-      if (self.Notification && Notification.permission !== 'granted') {
-        console.warn('[SW] permiso de notificación no otorgado, omitiendo');
-        continue;
-      }
+      if (self.Notification && Notification.permission !== 'granted') continue;
 
       await self.registration.showNotification('Oriente Fraterno ✦', {
         body:               `Hoy: ${ev.tipo} de ${ev.nombre}`,
-        tag:                `of-${evId}`,
+        tag:                `of-local-${evId}`,
         icon:               './icon-192.png',
         badge:              './icon-192.png',
         requireInteraction: true,
         vibrate:            [200, 100, 200, 100, 200],
         data:               { eventId: evId },
-        actions: [
-          { action: 'open', title: 'Ver app' }
-        ],
+        actions: [{ action: 'open', title: 'Ver app' }],
       });
 
       fired[fireKey] = true;
       changed = true;
-      console.log('[SW] notificación enviada para', ev.nombre, '-', ev.tipo);
+      console.log('[SW] notificación local para', ev.nombre);
     }
 
     if (changed) await dbSet('fired', fired);
