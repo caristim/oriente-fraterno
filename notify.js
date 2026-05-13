@@ -5,7 +5,6 @@ const { initializeApp, cert } = require('firebase-admin/app');
 const { getFirestore }        = require('firebase-admin/firestore');
 const { getMessaging }        = require('firebase-admin/messaging');
 
-// Las credenciales vienen de un Secret de GitHub (no se guardan en el código)
 const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
 
 initializeApp({ credential: cert(serviceAccount) });
@@ -61,14 +60,20 @@ async function main() {
     : `Oriente Fraterno ✦ · ${eventosHoy.length} eventos hoy`;
   const body = eventosHoy.map(ev => `${ev.tipo} de ${ev.nombre}`).join(' · ');
 
-  // 4. Enviar en lotes de 500 (límite de FCM)
+  // 4. Enviar en lotes de 500 con prioridad alta para entrega inmediata
   const BATCH = 500;
   for (let i = 0; i < tokens.length; i += BATCH) {
     const lote      = tokens.slice(i, i + BATCH);
     const resultado = await messaging.sendEachForMulticast({
       tokens: lote,
       notification: { title, body },
+      android: {
+        priority: 'high',         // prioridad alta en Android, evita retrasos del sistema
+      },
       webpush: {
+        headers: {
+          Urgency: 'high',        // entrega inmediata en navegadores
+        },
         notification: {
           title, body,
           icon:               '/icon-192.png',
@@ -102,4 +107,3 @@ async function main() {
 }
 
 main().catch(err => { console.error(err); process.exit(1); });
-
