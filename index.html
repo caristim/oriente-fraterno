@@ -104,6 +104,7 @@ window.OneSignalDeferred = window.OneSignalDeferred || [];
 OneSignalDeferred.push(async function(OneSignal) {
   await OneSignal.init({
     appId: "f2805eba-46fb-4943-9a4c-c618d332882f",
+    serviceWorkerPath: "OneSignalSDKWorker.js",
     notifyButton: { enable: true },
     promptOptions: {
       slidedown: {
