@@ -34,80 +34,20 @@
   <!-- Lucide Icons CDN -->
   <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
 
-  <!-- Firebase SDK (Firestore + Messaging) -->
+  <!-- Firebase SDK -->
   <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore-compat.js"></script>
-  <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-messaging-compat.js"></script>
   <script>
     const firebaseConfig = {
-      apiKey:            "AIzaSyD9gQW61AvKHhNai6gljNFE7q9rS7KKuN8",
-      authDomain:        "orientefraterno148-2a0c1.firebaseapp.com",
-      projectId:         "orientefraterno148-2a0c1",
-      storageBucket:     "orientefraterno148-2a0c1.firebasestorage.app",
+      apiKey: "AIzaSyD9gQW61AvKHhNai6gljNFE7q9rS7KKuN8",
+      authDomain: "orientefraterno148-2a0c1.firebaseapp.com",
+      projectId: "orientefraterno148-2a0c1",
+      storageBucket: "orientefraterno148-2a0c1.firebasestorage.app",
       messagingSenderId: "101867774014",
-      appId:             "1:101867774014:web:0b4bb797293910c419716f"
+      appId: "1:101867774014:web:0b4bb797293910c419716f"
     };
     firebase.initializeApp(firebaseConfig);
     const db = firebase.firestore();
-
-    // ── Firebase Cloud Messaging (FCM) ────────────────────────────────────
-    // PASO ÚNICO DE CONFIGURACIÓN:
-    // Reemplazá VAPID_KEY_HERE con tu clave de Firebase Console:
-    //   Firebase Console → Project Settings → Cloud Messaging
-    //   → Web Push certificates → Generate key pair → copiá el valor
-    const FCM_VAPID_KEY = 'BM1SqlyjKhW45Y2JSBqDTYRT5QBV0yduJBtonc_QrlqM1DgaDmanz_w1R0Qj40ZuiG-rz4s4stIqBuYmciutG9Y';
-
-    let messaging = null;
-
-    // Inicializar FCM y registrar el token de este dispositivo en Firestore.
-    // Se llama después de registrar el SW para pasarle el registro al SDK
-    // (useServiceWorker) — así FCM usa nuestro sw.js y no busca uno separado.
-    async function initFCM(swRegistration) {
-      if (!('Notification' in window) || Notification.permission !== 'granted') return;
-      if (FCM_VAPID_KEY === 'VAPID_KEY_HERE') {
-        console.warn('[FCM] Falta configurar FCM_VAPID_KEY en index.html');
-        return;
-      }
-      try {
-        messaging = firebase.messaging();
-        // Pasamos el SW ya registrado directamente en getToken.
-        // Esto reemplaza el método useServiceWorker que fue eliminado en Firebase 10+.
-        const token = await messaging.getToken({
-          vapidKey: FCM_VAPID_KEY,
-          serviceWorkerRegistration: swRegistration,
-        });
-        if (token) {
-          console.log('[FCM] token registrado');
-          await db.collection('fcm_tokens').doc(token).set({
-            token,
-            updatedAt: firebase.firestore.FieldValue.serverTimestamp(),
-            userAgent: navigator.userAgent,
-          });
-        }
-
-        // Manejar mensajes cuando la app está en primer plano
-        // (en background/cerrada lo maneja el SW directamente)
-        messaging.onMessage(payload => {
-          console.log('[FCM] mensaje en foreground:', payload);
-          const { title, body } = payload.notification || {};
-          if (title && Notification.permission === 'granted') {
-            navigator.serviceWorker.ready.then(reg => {
-              reg.showNotification(title, {
-                body:               body || '',
-                icon:               './icon-192.png',
-                badge:              './icon-192.png',
-                requireInteraction: true,
-                vibrate:            [200, 100, 200, 100, 200],
-                tag:                'of-fcm-fg',
-                actions: [{ action: 'open', title: 'Ver app' }],
-              });
-            });
-          }
-        });
-      } catch(e) {
-        console.warn('[FCM] error al inicializar:', e);
-      }
-    }
   </script>
 
   <!-- Google Fonts -->
@@ -156,6 +96,39 @@
     ::-webkit-scrollbar-track { background:#0f172a; }
     ::-webkit-scrollbar-thumb { background:#7a6128; border-radius:3px; }
   </style>
+
+<script src="https://cdn.onesignal.com/sdks/web/v16/OneSignalSDK.page.js" defer></script>
+
+<script>
+window.OneSignalDeferred = window.OneSignalDeferred || [];
+OneSignalDeferred.push(async function(OneSignal) {
+  await OneSignal.init({
+    appId: "f2805eba-46fb-4943-9a4c-c618d332882f",
+    notifyButton: { enable: true },
+    promptOptions: {
+      slidedown: {
+        prompts: [{
+          type: "push",
+          autoPrompt: true,
+          text: {
+            actionMessage: "Recibir alertas de eventos a las 9 AM",
+            acceptButton: "Si, activar",
+            cancelButton: "Ahora no"
+          },
+          delay: { pageViews: 1, timeDelay: 3 }
+        }]
+      }
+    }
+  });
+});
+
+// Las notificaciones las envia GitHub Actions automaticamente a las 9 AM.
+// Esta funcion ya no es necesaria pero se mantiene vacia para compatibilidad.
+async function scheduleNotification(ev) {
+  // Gestionado por GitHub Actions + OneSignal
+}
+</script>
+
 </head>
 <body class="bg-navy text-white bg-grid min-h-screen">
   <div id="root"></div>
@@ -227,12 +200,15 @@
     async function registerServiceWorker() {
       if (!('serviceWorker' in navigator)) return null;
       try {
+        // Forzar actualización del SW si hay una versión nueva
         swRegistration = await navigator.serviceWorker.register('./sw.js', { scope: './', updateViaCache: 'none' });
 
+        // Forzar activación inmediata si hay un SW esperando
         if (swRegistration.waiting) {
           swRegistration.waiting.postMessage({ type: 'SKIP_WAITING' });
         }
 
+        // Escuchar nuevas instalaciones
         swRegistration.addEventListener('updatefound', () => {
           const newSW = swRegistration.installing;
           if (newSW) {
@@ -244,6 +220,7 @@
           }
         });
 
+        // Esperar a que el SW esté activo
         if (swRegistration.installing) {
           await new Promise(resolve => {
             swRegistration.installing.addEventListener('statechange', function handler(e) {
@@ -255,16 +232,17 @@
           });
         }
 
-        // Periodic sync como respaldo adicional
+        // Periodic sync si está soportado (Chrome Android, user engagement alto)
         if ('periodicSync' in swRegistration) {
           try {
             const status = await navigator.permissions.query({ name: 'periodic-background-sync' });
             if (status.state === 'granted') {
               await swRegistration.periodicSync.register('of-daily-check', {
-                minInterval: 12 * 60 * 60 * 1000
+                minInterval: 12 * 60 * 60 * 1000 // 12 horas
               });
+              console.log('[App] periodicSync registrado');
             }
-          } catch (_) {}
+          } catch (_) { /* periodicSync puede no estar disponible */ }
         }
 
         return swRegistration;
@@ -301,8 +279,11 @@
         const reg = swRegistration || await registerServiceWorker();
         if (!reg) return;
         const sw = await waitForActiveSW(reg, 5000);
-        if (!sw) return;
+        if (!sw) { console.warn('[App] SW no disponible para sync'); return; }
         sw.postMessage({ type: 'SCHEDULE_EVENTS', events });
+        console.log('[App] eventos enviados al SW:', events.length);
+
+        // También registrar Background Sync (one-shot) como respaldo
         if ('sync' in reg) {
           try { await reg.sync.register('of-check'); } catch (_) {}
         }
@@ -375,15 +356,13 @@
       const [loading, setLoading]     = useState(true);
       const toastTimer = useRef(null);
 
-      // Registrar SW al montar y, si ya tiene permiso, iniciar FCM
+      // Registrar SW al montar (antes de cargar Firebase)
       useEffect(() => {
         registerServiceWorker().then(reg => {
-          if (!reg) return;
-          if (Notification.permission === 'granted') {
+          // Si ya tiene permiso, sincronizar eventos locales mientras carga Firebase
+          if (reg && Notification.permission === 'granted') {
             const cached = loadEvents();
             if (cached.length > 0) syncEventsToSW(cached);
-            // Iniciar FCM pasándole el SW ya registrado
-            initFCM(reg).catch(console.warn);
           }
         });
       }, []);
@@ -396,6 +375,7 @@
             setEvents(fbEvents);
             saveEvents(fbEvents);
             setLoading(false);
+            // Sincronizar con SW cada vez que cambien los eventos
             if (Notification.permission === 'granted') {
               syncEventsToSW(fbEvents);
             }
@@ -425,8 +405,10 @@
         const fecha = `${mesStr}-${diaStr}`;
         const ev = { id: Date.now(), nombre: nombre.trim(), fecha, tipo };
         await saveEventToFirebase(ev);
+        await scheduleNotification(ev);
         setNombre(''); setMes(''); setDia(''); setTipo('');
         showToast('Evento registrado ✦');
+        // La sincronización con SW se hará automáticamente cuando Firebase actualice
       }
 
       async function handleDelete(id) {
@@ -438,8 +420,8 @@
       async function handleNotify() {
         if (!('Notification' in window)) { showToast('Navegador no soportado'); return; }
         if (notifPerm === 'granted') {
+          // Ya tiene permiso: re-sincronizar eventos con el SW
           await syncEventsToSW(events);
-          if (swRegistration) await initFCM(swRegistration).catch(console.warn);
           showToast('Notificaciones ya activas ✦');
           return;
         }
@@ -447,7 +429,6 @@
         setNotifPerm(perm);
         if (perm === 'granted') {
           await syncEventsToSW(events);
-          if (swRegistration) await initFCM(swRegistration).catch(console.warn);
           showToast('Notificaciones activadas ✦');
         } else {
           showToast('Permiso denegado');
@@ -496,11 +477,11 @@
                     : 'border-gold/30 text-gold hover:bg-gold/10'}`}
               >
                 <Icon name={notifGranted ? 'BellRing' : 'Bell'} size={15} />
-                {notifGranted ? 'Notificaciones Activas ✦' : 'Activar Notificaciones'}
+                {notifGranted ? 'Notificaciones Activas ✦' : 'Activar Notificaciones Web'}
               </button>
               <p className="text-center text-gold/50 text-xs italic mt-2 tracking-wide">
                 {notifGranted
-                  ? 'Recibirás alertas a las 9:00 AM aunque la app esté cerrada ✦'
+                  ? 'Service Worker activo · Recibirás alertas a las 9:00 AM en cada fecha ✦'
                   : 'Activa para recibir alertas a las 9:00 AM en cada fecha'}
               </p>
             </Card>
