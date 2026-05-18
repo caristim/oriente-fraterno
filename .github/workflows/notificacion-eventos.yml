@@ -1,0 +1,119 @@
+name: Notificacion Eventos 9AM
+
+'on':
+  schedule:
+    - cron: '0 12 * * *'
+  workflow_dispatch:
+
+jobs:
+  enviar-notificacion:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verificar eventos y notificar
+        env:
+          FIREBASE_PROJECT_ID: ${{ secrets.OF_FIREBASE_PROJECT_ID }}
+          FIREBASE_API_KEY: ${{ secrets.OF_FIREBASE_API_KEY }}
+          ONESIGNAL_APP_ID: ${{ secrets.OF_ONESIGNAL_APP_ID }}
+          ONESIGNAL_API_KEY: ${{ secrets.OF_ONESIGNAL_API_KEY }}
+        run: |
+          node << 'EOF'
+          const https = require('https');
+
+          // Fecha de hoy en Uruguay (UTC-3)
+          const ahora = new Date();
+          const uruguayOffset = -3 * 60;
+          const localTime = new Date(ahora.getTime() + uruguayOffset * 60000);
+          const diaHoy = String(localTime.getUTCDate()).padStart(2, '0');
+          const mesHoy = String(localTime.getUTCMonth() + 1).padStart(2, '0');
+          const fechaHoy = mesHoy + '-' + diaHoy;
+
+          console.log('Buscando eventos para fecha: ' + fechaHoy);
+
+          // Consultar Firestore REST API (lectura publica si las reglas lo permiten)
+          const projectId = process.env.FIREBASE_PROJECT_ID;
+          const apiKey = process.env.FIREBASE_API_KEY;
+          const firestoreUrl = 'firestore.googleapis.com';
+          const firestorePath = '/v1/projects/' + projectId + '/databases/(default)/documents/eventos?key=' + apiKey;
+
+          const options = {
+            hostname: firestoreUrl,
+            path: firestorePath,
+            method: 'GET',
+            headers: { 'Content-Type': 'application/json' }
+          };
+
+          https.get({ hostname: firestoreUrl, path: firestorePath }, (res) => {
+            let data = '';
+            res.on('data', chunk => data += chunk);
+            res.on('end', () => {
+              let parsed;
+              try {
+                parsed = JSON.parse(data);
+              } catch(e) {
+                console.error('Error parseando Firestore:', e.message);
+                return;
+              }
+
+              const docs = parsed.documents || [];
+              if (docs.length === 0) {
+                console.log('No hay eventos en Firestore.');
+                return;
+              }
+
+              // Parsear campos de Firestore (formato tipado)
+              const eventos = docs.map(doc => {
+                const f = doc.fields || {};
+                return {
+                  nombre: (f.nombre && f.nombre.stringValue) || '',
+                  fecha:  (f.fecha  && f.fecha.stringValue)  || '',
+                  tipo:   (f.tipo   && f.tipo.stringValue)   || ''
+                };
+              });
+
+              // Filtrar eventos de hoy
+              const hoy = eventos.filter(e => e.fecha === fechaHoy);
+
+              if (hoy.length === 0) {
+                console.log('Hoy no hay eventos. No se envia notificacion.');
+                return;
+              }
+
+              // Armar un mensaje por cada evento de hoy
+              hoy.forEach(ev => {
+                const mensaje = 'Hoy: ' + ev.tipo + ' de ' + ev.nombre;
+                console.log('Enviando: ' + mensaje);
+
+                const body = JSON.stringify({
+                  app_id: process.env.ONESIGNAL_APP_ID,
+                  included_segments: ['Total Subscriptions'],
+                  headings: { es: 'Oriente Fraterno 148' },
+                  contents: { es: mensaje }
+                });
+
+                const reqOptions = {
+                  hostname: 'api.onesignal.com',
+                  path: '/notifications',
+                  method: 'POST',
+                  headers: {
+                    'Content-Type': 'application/json',
+                    'Authorization': 'Key ' + process.env.ONESIGNAL_API_KEY
+                  }
+                };
+
+                const req = https.request(reqOptions, (res) => {
+                  let respuesta = '';
+                  res.on('data', chunk => respuesta += chunk);
+                  res.on('end', () => {
+                    console.log('Respuesta OneSignal: ' + respuesta);
+                  });
+                });
+
+                req.on('error', e => console.error('Error enviando: ' + e.message));
+                req.write(body);
+                req.end();
+              });
+            });
+          }).on('error', e => {
+            console.error('Error consultando Firestore: ' + e.message);
+          });
+          EOF
