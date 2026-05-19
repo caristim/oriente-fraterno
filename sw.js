@@ -1,54 +1,12 @@
 // ── Oriente Fraterno 148 · Service Worker ─────────────────────────────────
-// v6 — Firebase Messaging integrado directamente aquí.
-// Un solo SW maneja todo: push FCM y notificaciones locales de respaldo.
-// NO se usa firebase-messaging-sw.js separado (evita conflicto de scope).
+// Combina OneSignal (notificaciones push a las 9 AM via GitHub Actions)
+// con la logica propia de la app (sync de eventos, notificaciones locales).
 
-importScripts('https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js');
-importScripts('https://www.gstatic.com/firebasejs/10.8.0/firebase-messaging-compat.js');
+importScripts('https://cdn.onesignal.com/sdks/web/v16/OneSignalSDK.sw.js');
 
-const SW_VERSION = 'of-sw-v6';
+const SW_VERSION = 'of-sw-v7';
 const DB_NAME    = 'of_sw';
 const DB_VERSION = 1;
-
-// ── Firebase Messaging dentro del SW ──────────────────────────────────────
-// Al inicializar Firebase aquí, este SW puede recibir mensajes push de FCM
-// aunque la app esté completamente cerrada en el smartphone.
-
-firebase.initializeApp({
-  apiKey:            'AIzaSyD9gQW61AvKHhNai6gljNFE7q9rS7KKuN8',
-  authDomain:        'orientefraterno148-2a0c1.firebaseapp.com',
-  projectId:         'orientefraterno148-2a0c1',
-  storageBucket:     'orientefraterno148-2a0c1.firebasestorage.app',
-  messagingSenderId: '101867774014',
-  appId:             '1:101867774014:web:0b4bb797293910c419716f',
-});
-
-const fcmMessaging = firebase.messaging();
-
-// Handler para mensajes push recibidos con la app cerrada o en background.
-// FCM muestra la notificación automáticamente cuando el payload incluye
-// notification.title y notification.body (que es lo que envía Cloud Functions).
-// Este handler es obligatorio para que el SW procese el mensaje correctamente.
-fcmMessaging.onBackgroundMessage(payload => {
-  console.log('[SW-FCM] push en background:', payload);
-
-  // Si ya viene con notification.title, FCM lo muestra solo — no hacemos nada más.
-  if (payload.notification && payload.notification.title) return;
-
-  // Fallback: si solo viene data (sin notification), mostramos manualmente.
-  const title = (payload.data && payload.data.title) || 'Oriente Fraterno ✦';
-  const body  = (payload.data && payload.data.body)  || 'Hoy hay un evento registrado';
-
-  return self.registration.showNotification(title, {
-    body,
-    icon:               './icon-192.png',
-    badge:              './icon-192.png',
-    requireInteraction: true,
-    vibrate:            [200, 100, 200, 100, 200],
-    tag:                'of-fcm-bg',
-    actions: [{ action: 'open', title: 'Ver app' }],
-  });
-});
 
 // ── IndexedDB helpers ──────────────────────────────────────────────────────
 
@@ -121,7 +79,7 @@ self.addEventListener('message', async e => {
   }
 });
 
-// ── Background Sync (respaldo adicional) ──────────────────────────────────
+// ── Background Sync ────────────────────────────────────────────────────────
 
 self.addEventListener('periodicsync', e => {
   if (e.tag === 'of-daily-check') {
@@ -142,11 +100,11 @@ self.addEventListener('fetch', e => {
     checkAndNotify().catch(console.warn);
   }
   e.respondWith(
-    fetch(e.request).catch(() => new Response('Sin conexión', { status: 503 }))
+    fetch(e.request).catch(() => new Response('Sin conexion', { status: 503 }))
   );
 });
 
-// ── Clic en notificación ───────────────────────────────────────────────────
+// ── Clic en notificacion ───────────────────────────────────────────────────
 
 self.addEventListener('notificationclick', e => {
   e.notification.close();
@@ -161,9 +119,9 @@ self.addEventListener('notificationclick', e => {
 });
 
 // ── Check local (respaldo para cuando el usuario abre la app) ─────────────
-// La notificación principal a las 9 AM viene del push de Cloud Functions.
-// Este check actúa de respaldo: si el usuario abre la app el día del evento
-// y el push no llegó (sin internet en ese momento, etc.), igual avisa.
+// La notificacion principal a las 9 AM viene de GitHub Actions via OneSignal.
+// Este check actua de respaldo: si el usuario abre la app el dia del evento
+// y el push no llego, igual avisa.
 
 async function checkAndNotify() {
   try {
@@ -200,7 +158,7 @@ async function checkAndNotify() {
 
       if (self.Notification && Notification.permission !== 'granted') continue;
 
-      await self.registration.showNotification('Oriente Fraterno ✦', {
+      await self.registration.showNotification('Oriente Fraterno', {
         body:               `Hoy: ${ev.tipo} de ${ev.nombre}`,
         tag:                `of-local-${evId}`,
         icon:               './icon-192.png',
@@ -213,7 +171,7 @@ async function checkAndNotify() {
 
       fired[fireKey] = true;
       changed = true;
-      console.log('[SW] notificación local para', ev.nombre);
+      console.log('[SW] notificacion local para', ev.nombre);
     }
 
     if (changed) await dbSet('fired', fired);
