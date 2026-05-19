@@ -97,36 +97,50 @@
     ::-webkit-scrollbar-thumb { background:#7a6128; border-radius:3px; }
   </style>
 
-<script src="https://cdn.onesignal.com/sdks/web/v16/OneSignalSDK.page.js" defer></script>
+<script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-messaging-compat.js"></script>
 
 <script>
-window.OneSignalDeferred = window.OneSignalDeferred || [];
-OneSignalDeferred.push(async function(OneSignal) {
-  await OneSignal.init({
-    appId: "f2805eba-46fb-4943-9a4c-c618d332882f",
-    serviceWorkerPath: "OneSignalSDKWorker.js",
-    notifyButton: { enable: true },
-    promptOptions: {
-      slidedown: {
-        prompts: [{
-          type: "push",
-          autoPrompt: true,
-          text: {
-            actionMessage: "Recibir alertas de eventos a las 9 AM",
-            acceptButton: "Si, activar",
-            cancelButton: "Ahora no"
-          },
-          delay: { pageViews: 1, timeDelay: 3 }
-        }]
-      }
+// Solicitar permiso y suscribir al topic FCM para recibir notificaciones a las 9 AM
+async function iniciarNotificacionesFCM() {
+  try {
+    const messaging = firebase.messaging();
+
+    // Pedir permiso al usuario
+    const permiso = await Notification.requestPermission();
+    if (permiso !== 'granted') {
+      console.log('Permiso de notificaciones denegado');
+      return;
     }
-  });
+
+    // Obtener token FCM del dispositivo
+    const token = await messaging.getToken({
+      vapidKey: 'BM1SqlyjKhW45Y2JSBqDTYRT5QBV0yduJBtonc_QrlqM1DgaDmanz_w1R0Qj40ZuiG-rz4s4stIqBuYmciutG9Y',
+      serviceWorkerRegistration: await navigator.serviceWorker.ready
+    });
+
+    if (token) {
+      console.log('Token FCM obtenido:', token);
+      // Guardar token en Firestore para poder enviar notificaciones
+      await db.collection('fcm_tokens').doc(token).set({
+        token: token,
+        fecha: new Date().toISOString()
+      });
+      console.log('Suscripcion FCM completada');
+    }
+  } catch(err) {
+    console.warn('Error FCM:', err.message);
+  }
+}
+
+// Iniciar al cargar la pagina
+window.addEventListener('load', () => {
+  if ('serviceWorker' in navigator && 'Notification' in window) {
+    iniciarNotificacionesFCM();
+  }
 });
 
-// Las notificaciones las envia GitHub Actions automaticamente a las 9 AM.
-// Esta funcion ya no es necesaria pero se mantiene vacia para compatibilidad.
 async function scheduleNotification(ev) {
-  // Gestionado por GitHub Actions + OneSignal
+  // Gestionado por GitHub Actions + FCM
 }
 </script>
 
