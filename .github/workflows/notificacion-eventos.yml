@@ -9,111 +9,134 @@ jobs:
   enviar-notificacion:
     runs-on: ubuntu-latest
     steps:
+      - name: Instalar googleapis
+        run: npm install googleapis
+
       - name: Verificar eventos y notificar
         env:
           FIREBASE_PROJECT_ID: ${{ secrets.OF_FIREBASE_PROJECT_ID }}
           FIREBASE_API_KEY: ${{ secrets.OF_FIREBASE_API_KEY }}
-          ONESIGNAL_APP_ID: ${{ secrets.OF_ONESIGNAL_APP_ID }}
-          ONESIGNAL_API_KEY: ${{ secrets.OF_ONESIGNAL_API_KEY }}
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.OF_FIREBASE_SERVICE_ACCOUNT }}
         run: |
           node << 'EOF'
           const https = require('https');
+          const { GoogleAuth } = require('googleapis/build/src/auth/googleauth');
 
-          // Fecha de hoy en Uruguay (UTC-3)
-          const ahora = new Date();
-          const uruguayOffset = -3 * 60;
-          const localTime = new Date(ahora.getTime() + uruguayOffset * 60000);
-          const diaHoy = String(localTime.getUTCDate()).padStart(2, '0');
-          const mesHoy = String(localTime.getUTCMonth() + 1).padStart(2, '0');
-          const fechaHoy = mesHoy + '-' + diaHoy;
-
-          console.log('Buscando eventos para fecha: ' + fechaHoy);
-
-          // Consultar Firestore REST API (lectura publica si las reglas lo permiten)
-          const projectId = process.env.FIREBASE_PROJECT_ID;
-          const apiKey = process.env.FIREBASE_API_KEY;
-          const firestoreUrl = 'firestore.googleapis.com';
-          const firestorePath = '/v1/projects/' + projectId + '/databases/(default)/documents/eventos?key=' + apiKey;
-
-          const options = {
-            hostname: firestoreUrl,
-            path: firestorePath,
-            method: 'GET',
-            headers: { 'Content-Type': 'application/json' }
-          };
-
-          https.get({ hostname: firestoreUrl, path: firestorePath }, (res) => {
-            let data = '';
-            res.on('data', chunk => data += chunk);
-            res.on('end', () => {
-              let parsed;
-              try {
-                parsed = JSON.parse(data);
-              } catch(e) {
-                console.error('Error parseando Firestore:', e.message);
-                return;
-              }
-
-              const docs = parsed.documents || [];
-              if (docs.length === 0) {
-                console.log('No hay eventos en Firestore.');
-                return;
-              }
-
-              // Parsear campos de Firestore (formato tipado)
-              const eventos = docs.map(doc => {
-                const f = doc.fields || {};
-                return {
-                  nombre: (f.nombre && f.nombre.stringValue) || '',
-                  fecha:  (f.fecha  && f.fecha.stringValue)  || '',
-                  tipo:   (f.tipo   && f.tipo.stringValue)   || ''
-                };
-              });
-
-              // Filtrar eventos de hoy
-              const hoy = eventos.filter(e => e.fecha === fechaHoy);
-
-              if (hoy.length === 0) {
-                console.log('Hoy no hay eventos. No se envia notificacion.');
-                return;
-              }
-
-              // Armar un mensaje por cada evento de hoy
-              hoy.forEach(ev => {
-                const mensaje = 'Hoy: ' + ev.tipo + ' de ' + ev.nombre;
-                console.log('Enviando: ' + mensaje);
-
-                const body = JSON.stringify({
-                  app_id: process.env.ONESIGNAL_APP_ID,
-                  included_segments: ['Total Subscriptions'],
-                  headings: { es: 'Oriente Fraterno 148' },
-                  contents: { es: mensaje }
-                });
-
-                const reqOptions = {
-                  hostname: 'api.onesignal.com',
-                  path: '/notifications',
-                  method: 'POST',
-                  headers: {
-                    'Content-Type': 'application/json',
-                    'Authorization': 'Key ' + process.env.ONESIGNAL_API_KEY
-                  }
-                };
-
-                const req = https.request(reqOptions, (res) => {
-                  let respuesta = '';
-                  res.on('data', chunk => respuesta += chunk);
-                  res.on('end', () => {
-                    console.log('Respuesta OneSignal: ' + respuesta);
-                  });
-                });
-
-                req.on('error', e => console.error('Error enviando: ' + e.message));
-                req.write(body);
-                req.end();
-              });
+          async function getAccessToken(serviceAccount) {
+            const auth = new GoogleAuth({
+              credentials: serviceAccount,
+              scopes: ['https://www.googleapis.com/auth/firebase.messaging']
             });
-          }).on('error', e => {
-            console.error('Error consultando Firestore: ' + e.message);
-          });
+            const client = await auth.getClient();
+            const token = await client.getAccessToken();
+            return token.token;
+          }
+
+          function firestoreGet(path, apiKey) {
+            return new Promise((resolve, reject) => {
+              const url = '/v1/projects/' + process.env.FIREBASE_PROJECT_ID + path + '?key=' + apiKey;
+              https.get({ hostname: 'firestore.googleapis.com', path: url }, (res) => {
+                let data = '';
+                res.on('data', chunk => data += chunk);
+                res.on('end', () => {
+                  try { resolve(JSON.parse(data)); }
+                  catch(e) { reject(e); }
+                });
+              }).on('error', reject);
+            });
+          }
+
+          function fcmSend(projectId, accessToken, token, titulo, mensaje) {
+            return new Promise((resolve, reject) => {
+              const body = JSON.stringify({
+                message: {
+                  token: token,
+                  notification: { title: titulo, body: mensaje },
+                  webpush: {
+                    notification: {
+                      icon: 'https://caristim.github.io/oriente-fraterno/icon-192.png',
+                      requireInteraction: true,
+                      vibrate: [200, 100, 200]
+                    },
+                    fcm_options: {
+                      link: 'https://caristim.github.io/oriente-fraterno/'
+                    }
+                  }
+                }
+              });
+              const options = {
+                hostname: 'fcm.googleapis.com',
+                path: '/v1/projects/' + projectId + '/messages:send',
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  'Authorization': 'Bearer ' + accessToken
+                }
+              };
+              const req = https.request(options, (res) => {
+                let r = '';
+                res.on('data', chunk => r += chunk);
+                res.on('end', () => { console.log('FCM respuesta:', r); resolve(); });
+              });
+              req.on('error', reject);
+              req.write(body);
+              req.end();
+            });
+          }
+
+          async function main() {
+            const ahora = new Date();
+            const uruguayOffset = -3 * 60;
+            const localTime = new Date(ahora.getTime() + uruguayOffset * 60000);
+            const diaHoy = String(localTime.getUTCDate()).padStart(2, '0');
+            const mesHoy = String(localTime.getUTCMonth() + 1).padStart(2, '0');
+            const fechaHoy = mesHoy + '-' + diaHoy;
+            const apiKey = process.env.FIREBASE_API_KEY;
+            const projectId = process.env.FIREBASE_PROJECT_ID;
+
+            console.log('Buscando eventos para fecha: ' + fechaHoy);
+
+            // 1. Obtener eventos de hoy
+            const eventosData = await firestoreGet('/databases/(default)/documents/eventos', apiKey);
+            const docs = eventosData.documents || [];
+            if (docs.length === 0) { console.log('No hay eventos.'); return; }
+
+            const eventos = docs.map(doc => {
+              const f = doc.fields || {};
+              return {
+                nombre: (f.nombre && f.nombre.stringValue) || '',
+                fecha:  (f.fecha  && f.fecha.stringValue)  || '',
+                tipo:   (f.tipo   && f.tipo.stringValue)   || ''
+              };
+            }).filter(e => e.fecha === fechaHoy);
+
+            if (eventos.length === 0) { console.log('Hoy no hay eventos.'); return; }
+
+            // 2. Obtener tokens FCM de todos los usuarios suscritos
+            const tokensData = await firestoreGet('/databases/(default)/documents/fcm_tokens', apiKey);
+            const tokenDocs = tokensData.documents || [];
+            if (tokenDocs.length === 0) { console.log('No hay tokens FCM registrados.'); return; }
+
+            const tokens = tokenDocs.map(doc => {
+              const f = doc.fields || {};
+              return (f.token && f.token.stringValue) || '';
+            }).filter(t => t.length > 0);
+
+            console.log('Tokens encontrados: ' + tokens.length);
+
+            // 3. Obtener access token para FCM
+            const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+            const accessToken = await getAccessToken(serviceAccount);
+
+            // 4. Enviar notificacion a cada token por cada evento
+            for (const ev of eventos) {
+              const mensaje = 'Hoy: ' + ev.tipo + ' de ' + ev.nombre;
+              console.log('Enviando: ' + mensaje);
+              for (const token of tokens) {
+                await fcmSend(projectId, accessToken, token, 'Oriente Fraterno 148', mensaje);
+              }
+            }
+          }
+
+          main().catch(e => { console.error('Error:', e.message); process.exit(1); });
           EOF
