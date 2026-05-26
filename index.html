@@ -98,50 +98,33 @@
   </style>
 
 <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-messaging-compat.js"></script>
-
 <script>
-// Solicitar permiso y suscribir al topic FCM para recibir notificaciones a las 9 AM
-async function iniciarNotificacionesFCM() {
+// Registrar token FCM para recibir notificaciones push a las 9 AM
+async function registrarTokenFCM() {
   try {
+    if (!('serviceWorker' in navigator) || !('Notification' in window)) return;
     const messaging = firebase.messaging();
-
-    // Pedir permiso al usuario
-    const permiso = await Notification.requestPermission();
-    if (permiso !== 'granted') {
-      console.log('Permiso de notificaciones denegado');
-      return;
-    }
-
-    // Obtener token FCM del dispositivo
     const token = await messaging.getToken({
       vapidKey: 'BM1SqlyjKhW45Y2JSBqDTYRT5QBV0yduJBtonc_QrlqM1DgaDmanz_w1R0Qj40ZuiG-rz4s4stIqBuYmciutG9Y',
       serviceWorkerRegistration: await navigator.serviceWorker.ready
     });
-
     if (token) {
-      console.log('Token FCM obtenido:', token);
-      // Guardar token en Firestore para poder enviar notificaciones
       await db.collection('fcm_tokens').doc(token).set({
         token: token,
-        fecha: new Date().toISOString()
+        updatedAt: new Date().toISOString()
       });
-      console.log('Suscripcion FCM completada');
+      console.log('[FCM] Token registrado OK');
     }
   } catch(err) {
-    console.warn('Error FCM:', err.message);
+    console.warn('[FCM] Error al registrar token:', err.message);
   }
 }
 
-// Iniciar al cargar la pagina
-window.addEventListener('load', () => {
-  if ('serviceWorker' in navigator && 'Notification' in window) {
-    iniciarNotificacionesFCM();
-  }
-});
+// Llamar cuando el usuario activa notificaciones
+window._registrarTokenFCM = registrarTokenFCM;
 
-async function scheduleNotification(ev) {
-  // Gestionado por GitHub Actions + FCM
-}
+// Funcion vacia para compatibilidad con el resto del codigo
+async function scheduleNotification(ev) {}
 </script>
 
 </head>
@@ -444,6 +427,7 @@ async function scheduleNotification(ev) {
         setNotifPerm(perm);
         if (perm === 'granted') {
           await syncEventsToSW(events);
+          if (window._registrarTokenFCM) await window._registrarTokenFCM();
           showToast('Notificaciones activadas ✦');
         } else {
           showToast('Permiso denegado');
