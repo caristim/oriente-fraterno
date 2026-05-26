@@ -9,9 +9,6 @@ jobs:
   enviar-notificacion:
     runs-on: ubuntu-latest
     steps:
-      - name: Instalar googleapis
-        run: npm install googleapis
-
       - name: Verificar eventos y notificar
         env:
           FIREBASE_PROJECT_ID: ${{ secrets.OF_FIREBASE_PROJECT_ID }}
@@ -19,64 +16,86 @@ jobs:
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.OF_FIREBASE_SERVICE_ACCOUNT }}
         run: |
           node << 'EOF'
-          const https = require('https');
-          const { GoogleAuth } = require('googleapis/build/src/auth/googleauth');
+          const https  = require('https');
+          const crypto = require('crypto');
 
-          async function getAccessToken(serviceAccount) {
-            const auth = new GoogleAuth({
-              credentials: serviceAccount,
-              scopes: ['https://www.googleapis.com/auth/firebase.messaging']
-            });
-            const client = await auth.getClient();
-            const token = await client.getAccessToken();
-            return token.token;
+          function base64url(str) {
+            return Buffer.from(str).toString('base64')
+              .replace(/\+/g,'-').replace(/\//g,'_').replace(/=/g,'');
           }
 
-          function firestoreGet(path, apiKey) {
+          function getGoogleToken(sa) {
             return new Promise((resolve, reject) => {
-              const url = '/v1/projects/' + process.env.FIREBASE_PROJECT_ID + path + '?key=' + apiKey;
-              https.get({ hostname: 'firestore.googleapis.com', path: url }, (res) => {
-                let data = '';
-                res.on('data', chunk => data += chunk);
+              const now = Math.floor(Date.now() / 1000);
+              const header  = { alg: 'RS256', typ: 'JWT' };
+              const payload = {
+                iss:   sa.client_email,
+                scope: 'https://www.googleapis.com/auth/firebase.messaging',
+                aud:   'https://oauth2.googleapis.com/token',
+                iat:   now,
+                exp:   now + 3600
+              };
+              const data = base64url(JSON.stringify(header)) + '.' + base64url(JSON.stringify(payload));
+              const sign = crypto.createSign('RSA-SHA256');
+              sign.update(data);
+              const jwt = data + '.' + sign.sign(sa.private_key, 'base64')
+                .replace(/\+/g,'-').replace(/\//g,'_').replace(/=/g,'');
+              const body = 'grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer&assertion=' + jwt;
+              const req = https.request({
+                hostname: 'oauth2.googleapis.com',
+                path: '/token',
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
+              }, (res) => {
+                let d = '';
+                res.on('data', c => d += c);
                 res.on('end', () => {
-                  try { resolve(JSON.parse(data)); }
-                  catch(e) { reject(e); }
+                  const p = JSON.parse(d);
+                  p.access_token ? resolve(p.access_token) : reject(new Error('Token error: ' + d));
                 });
+              });
+              req.on('error', reject);
+              req.write(body);
+              req.end();
+            });
+          }
+
+          function firestoreGet(projectId, apiKey, collection) {
+            return new Promise((resolve, reject) => {
+              const path = '/v1/projects/' + projectId + '/databases/(default)/documents/' + collection + '?key=' + apiKey;
+              https.get({ hostname: 'firestore.googleapis.com', path }, (res) => {
+                let d = '';
+                res.on('data', c => d += c);
+                res.on('end', () => { try { resolve(JSON.parse(d)); } catch(e) { reject(e); } });
               }).on('error', reject);
             });
           }
 
-          function fcmSend(projectId, accessToken, token, titulo, mensaje) {
+          function fcmSend(projectId, accessToken, token, titulo, cuerpo) {
             return new Promise((resolve, reject) => {
               const body = JSON.stringify({
                 message: {
-                  token: token,
-                  notification: { title: titulo, body: mensaje },
+                  token,
+                  notification: { title: titulo, body: cuerpo },
                   webpush: {
                     notification: {
-                      icon: 'https://caristim.github.io/oriente-fraterno/icon-192.png',
+                      icon:               'https://caristim.github.io/oriente-fraterno/icon-192.png',
                       requireInteraction: true,
-                      vibrate: [200, 100, 200]
+                      vibrate:            [200, 100, 200]
                     },
-                    fcm_options: {
-                      link: 'https://caristim.github.io/oriente-fraterno/'
-                    }
+                    fcm_options: { link: 'https://caristim.github.io/oriente-fraterno/' }
                   }
                 }
               });
-              const options = {
+              const req = https.request({
                 hostname: 'fcm.googleapis.com',
-                path: '/v1/projects/' + projectId + '/messages:send',
-                method: 'POST',
-                headers: {
-                  'Content-Type': 'application/json',
-                  'Authorization': 'Bearer ' + accessToken
-                }
-              };
-              const req = https.request(options, (res) => {
+                path:     '/v1/projects/' + projectId + '/messages:send',
+                method:   'POST',
+                headers:  { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + accessToken }
+              }, (res) => {
                 let r = '';
-                res.on('data', chunk => r += chunk);
-                res.on('end', () => { console.log('FCM respuesta:', r); resolve(); });
+                res.on('data', c => r += c);
+                res.on('end', () => { console.log('FCM: ' + r); resolve(); });
               });
               req.on('error', reject);
               req.write(body);
@@ -85,23 +104,19 @@ jobs:
           }
 
           async function main() {
-            const ahora = new Date();
-            const uruguayOffset = -3 * 60;
-            const localTime = new Date(ahora.getTime() + uruguayOffset * 60000);
-            const diaHoy = String(localTime.getUTCDate()).padStart(2, '0');
-            const mesHoy = String(localTime.getUTCMonth() + 1).padStart(2, '0');
-            const fechaHoy = mesHoy + '-' + diaHoy;
-            const apiKey = process.env.FIREBASE_API_KEY;
+            const ahora     = new Date();
+            const localTime = new Date(ahora.getTime() + (-3 * 60 * 60000));
+            const dia       = String(localTime.getUTCDate()).padStart(2,'0');
+            const mes       = String(localTime.getUTCMonth() + 1).padStart(2,'0');
+            const fechaHoy  = mes + '-' + dia;
             const projectId = process.env.FIREBASE_PROJECT_ID;
+            const apiKey    = process.env.FIREBASE_API_KEY;
 
-            console.log('Buscando eventos para fecha: ' + fechaHoy);
+            console.log('Fecha Uruguay: ' + fechaHoy);
 
-            // 1. Obtener eventos de hoy
-            const eventosData = await firestoreGet('/databases/(default)/documents/eventos', apiKey);
-            const docs = eventosData.documents || [];
-            if (docs.length === 0) { console.log('No hay eventos.'); return; }
-
-            const eventos = docs.map(doc => {
+            // 1. Eventos de hoy
+            const eventosData = await firestoreGet(projectId, apiKey, 'eventos');
+            const eventos = (eventosData.documents || []).map(doc => {
               const f = doc.fields || {};
               return {
                 nombre: (f.nombre && f.nombre.stringValue) || '',
@@ -111,32 +126,32 @@ jobs:
             }).filter(e => e.fecha === fechaHoy);
 
             if (eventos.length === 0) { console.log('Hoy no hay eventos.'); return; }
+            console.log('Eventos hoy: ' + eventos.map(e => e.nombre).join(', '));
 
-            // 2. Obtener tokens FCM de todos los usuarios suscritos
-            const tokensData = await firestoreGet('/databases/(default)/documents/fcm_tokens', apiKey);
-            const tokenDocs = tokensData.documents || [];
-            if (tokenDocs.length === 0) { console.log('No hay tokens FCM registrados.'); return; }
-
-            const tokens = tokenDocs.map(doc => {
+            // 2. Tokens FCM
+            const tokensData = await firestoreGet(projectId, apiKey, 'fcm_tokens');
+            const tokens = (tokensData.documents || []).map(doc => {
               const f = doc.fields || {};
               return (f.token && f.token.stringValue) || '';
             }).filter(t => t.length > 0);
 
-            console.log('Tokens encontrados: ' + tokens.length);
+            if (tokens.length === 0) { console.log('No hay tokens FCM registrados.'); return; }
+            console.log('Tokens: ' + tokens.length);
 
-            // 3. Obtener access token para FCM
-            const serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
-            const accessToken = await getAccessToken(serviceAccount);
+            // 3. Access token Google
+            const sa = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+            const accessToken = await getGoogleToken(sa);
+            console.log('Token Google OK');
 
-            // 4. Enviar notificacion a cada token por cada evento
+            // 4. Enviar FCM a cada token
             for (const ev of eventos) {
-              const mensaje = 'Hoy: ' + ev.tipo + ' de ' + ev.nombre;
-              console.log('Enviando: ' + mensaje);
+              const msg = 'Hoy: ' + ev.tipo + ' de ' + ev.nombre;
+              console.log('Enviando: ' + msg);
               for (const token of tokens) {
-                await fcmSend(projectId, accessToken, token, 'Oriente Fraterno 148', mensaje);
+                await fcmSend(projectId, accessToken, token, 'Oriente Fraterno 148', msg);
               }
             }
           }
 
-          main().catch(e => { console.error('Error:', e.message); process.exit(1); });
+          main().catch(e => { console.error('Error: ' + e.message); process.exit(1); });
           EOF
