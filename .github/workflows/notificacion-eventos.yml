@@ -98,12 +98,14 @@ jobs:
             });
           }
 
-          // Envia notificacion FCM como mensaje data-only (CRITICO para background).
-          // No usar el campo "notification" en el payload raiz: con data-only el push
-          // siempre llega al Service Worker que lo muestra correctamente con la app
-          // cerrada o en segundo plano, tanto en Android como en iOS (PWA instalada).
-          // Los bloques android/apns/webpush solo configuran prioridad y sonido,
-          // no reemplazan el contenido que maneja el SW.
+          // Envia notificacion FCM con payload mixto:
+          // - "data" para que el Service Worker maneje el contenido en background
+          //   (Android con app cerrada, iOS con app cerrada via SW).
+          // - "apns.payload.aps.alert" con titulo y cuerpo explícitos: requerido
+          //   por Apple para despertar la PWA instalada cuando la app está cerrada.
+          //   Sin aps.alert, iOS puede silenciar el push aunque content-available=1.
+          // - "android" y "webpush" configuran prioridad y sonido sin reemplazar
+          //   el contenido que maneja el Service Worker.
           function fcmSend(projectId, accessToken, token, titulo, cuerpo) {
             return new Promise((resolve, reject) => {
               const body = JSON.stringify({
@@ -127,6 +129,10 @@ jobs:
                     },
                     payload: {
                       aps: {
+                        alert: {
+                          title: titulo,
+                          body:  cuerpo
+                        },
                         sound: 'default',
                         badge: 1,
                         'content-available': 1
