@@ -71,6 +71,28 @@ jobs:
             });
           }
 
+          // Borrar token invalido de Firestore usando la API REST con autenticacion
+          function firestoreDelete(projectId, accessToken, docPath) {
+            return new Promise((resolve) => {
+              const path = '/v1/projects/' + projectId + '/databases/(default)/documents/' + docPath;
+              const req = https.request({
+                hostname: 'firestore.googleapis.com',
+                path,
+                method: 'DELETE',
+                headers: { 'Authorization': 'Bearer ' + accessToken }
+              }, (res) => {
+                let d = '';
+                res.on('data', c => d += c);
+                res.on('end', () => {
+                  console.log('Token invalido eliminado: ' + docPath.split('/').pop().substring(0,20) + '...');
+                  resolve();
+                });
+              });
+              req.on('error', () => resolve()); // Si falla no bloquear
+              req.end();
+            });
+          }
+
           function fcmSend(projectId, accessToken, token, titulo, cuerpo) {
             return new Promise((resolve, reject) => {
               const body = JSON.stringify({
@@ -95,7 +117,7 @@ jobs:
               }, (res) => {
                 let r = '';
                 res.on('data', c => r += c);
-                res.on('end', () => { console.log('FCM: ' + r); resolve(); });
+                res.on('end', () => { resolve(r); });
               });
               req.on('error', reject);
               req.write(body);
@@ -104,6 +126,7 @@ jobs:
           }
 
           async function main() {
+            // Hora fija Uruguay UTC-3 (no cambia horario de verano)
             const ahora     = new Date();
             const localTime = new Date(ahora.getTime() + (-3 * 60 * 60000));
             const dia       = String(localTime.getUTCDate()).padStart(2,'0');
@@ -112,7 +135,7 @@ jobs:
             const projectId = process.env.FIREBASE_PROJECT_ID;
             const apiKey    = process.env.FIREBASE_API_KEY;
 
-            console.log('Fecha Uruguay: ' + fechaHoy);
+            console.log('Fecha Uruguay (UTC-3 fijo): ' + fechaHoy);
 
             // 1. Eventos de hoy
             const eventosData = await firestoreGet(projectId, apiKey, 'eventos');
@@ -130,26 +153,46 @@ jobs:
 
             // 2. Tokens FCM
             const tokensData = await firestoreGet(projectId, apiKey, 'fcm_tokens');
-            const tokens = (tokensData.documents || []).map(doc => {
-              const f = doc.fields || {};
-              return (f.token && f.token.stringValue) || '';
-            }).filter(t => t.length > 0);
+            const tokenDocs  = (tokensData.documents || []).map(doc => ({
+              path:  doc.name.split('/documents/')[1],
+              token: (doc.fields && doc.fields.token && doc.fields.token.stringValue) || ''
+            })).filter(t => t.token.length > 0);
 
-            if (tokens.length === 0) { console.log('No hay tokens FCM registrados.'); return; }
-            console.log('Tokens: ' + tokens.length);
+            if (tokenDocs.length === 0) { console.log('No hay tokens FCM registrados.'); return; }
+            console.log('Tokens encontrados: ' + tokenDocs.length);
 
             // 3. Access token Google
             const sa = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
             const accessToken = await getGoogleToken(sa);
             console.log('Token Google OK');
 
-            // 4. Enviar FCM a cada token
+            // 4. Enviar FCM y limpiar tokens invalidos automaticamente
+            const tokensInvalidos = [];
             for (const ev of eventos) {
               const msg = 'Hoy: ' + ev.tipo + ' de ' + ev.nombre;
               console.log('Enviando: ' + msg);
-              for (const token of tokens) {
-                await fcmSend(projectId, accessToken, token, 'Oriente Fraterno 148', msg);
+              for (const td of tokenDocs) {
+                const respuesta = await fcmSend(projectId, accessToken, td.token, 'Oriente Fraterno 148', msg);
+                const parsed = JSON.parse(respuesta);
+                if (parsed.error && parsed.error.status === 'NOT_FOUND') {
+                  // Token invalido - marcar para borrar (solo una vez por token)
+                  if (!tokensInvalidos.includes(td.path)) {
+                    tokensInvalidos.push(td.path);
+                  }
+                } else {
+                  console.log('Enviado OK a token: ' + td.token.substring(0,20) + '...');
+                }
               }
+            }
+
+            // 5. Borrar tokens invalidos de Firestore
+            if (tokensInvalidos.length > 0) {
+              console.log('Limpiando ' + tokensInvalidos.length + ' token(s) invalido(s)...');
+              for (const path of tokensInvalidos) {
+                await firestoreDelete(projectId, accessToken, path);
+              }
+            } else {
+              console.log('Todos los tokens son validos.');
             }
           }
 
