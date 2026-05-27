@@ -100,55 +100,32 @@
 <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-messaging-compat.js"></script>
 <script>
 // Registrar token FCM para recibir notificaciones push a las 9 AM
-// Maneja: tokens invalidos, reinstalacion, cambio de navegador, duplicados
 async function registrarTokenFCM() {
   try {
     if (!('serviceWorker' in navigator) || !('Notification' in window)) return;
-    if (Notification.permission !== 'granted') return;
-
     const messaging = firebase.messaging();
-    const swReg = await navigator.serviceWorker.ready;
-
-    // Obtener token actual del dispositivo
-    const tokenActual = await messaging.getToken({
+    const token = await messaging.getToken({
       vapidKey: 'BM1SqlyjKhW45Y2JSBqDTYRT5QBV0yduJBtonc_QrlqM1DgaDmanz_w1R0Qj40ZuiG-rz4s4stIqBuYmciutG9Y',
-      serviceWorkerRegistration: swReg
+      serviceWorkerRegistration: await navigator.serviceWorker.ready
     });
-
-    if (!tokenActual) {
-      console.warn('[FCM] No se pudo obtener token');
-      return;
+    if (token) {
+      // Si el token cambió (rotación por actualización del navegador), eliminar el anterior
+      const prevToken = localStorage.getItem('fcm_token');
+      if (prevToken && prevToken !== token) {
+        try {
+          await db.collection('fcm_tokens').doc(prevToken).delete();
+          console.log('[FCM] Token anterior eliminado de Firestore');
+        } catch(_) {}
+      }
+      // Guardar/actualizar el token actual en Firestore
+      await db.collection('fcm_tokens').doc(token).set({
+        token: token,
+        updatedAt: new Date().toISOString()
+      });
+      // Recordar el token actual para detectar futuros cambios
+      localStorage.setItem('fcm_token', token);
+      console.log('[FCM] Token registrado OK');
     }
-
-    // Recuperar token anterior guardado localmente
-    const tokenAnterior = localStorage.getItem('fcm_token');
-
-    // Si el token cambio (reinstalacion, cambio de navegador), borrar el viejo
-    if (tokenAnterior && tokenAnterior !== tokenActual) {
-      try {
-        await db.collection('fcm_tokens').doc(tokenAnterior).delete();
-        console.log('[FCM] Token anterior eliminado');
-      } catch(e) { /* puede que ya no exista */ }
-    }
-
-    // Guardar token actual en Firestore (doc(token) evita duplicados automaticamente)
-    await db.collection('fcm_tokens').doc(tokenActual).set({
-      token:     tokenActual,
-      updatedAt: new Date().toISOString(),
-      userAgent: navigator.userAgent
-    });
-
-    // Guardar token localmente para detectar cambios futuros
-    localStorage.setItem('fcm_token', tokenActual);
-    console.log('[FCM] Token registrado OK');
-
-    // Escuchar si FCM rota el token automaticamente
-    messaging.onTokenRefresh(async () => {
-      console.log('[FCM] Token rotado, actualizando...');
-      localStorage.removeItem('fcm_token');
-      await registrarTokenFCM();
-    });
-
   } catch(err) {
     console.warn('[FCM] Error al registrar token:', err.message);
   }
@@ -156,13 +133,6 @@ async function registrarTokenFCM() {
 
 // Llamar cuando el usuario activa notificaciones
 window._registrarTokenFCM = registrarTokenFCM;
-
-// Tambien registrar al cargar si ya tiene permiso (cubre reinstalacion/cambio de navegador)
-window.addEventListener('load', async () => {
-  if ('serviceWorker' in navigator && Notification.permission === 'granted') {
-    await registrarTokenFCM();
-  }
-});
 
 // Funcion vacia para compatibilidad con el resto del codigo
 async function scheduleNotification(ev) {}
@@ -397,11 +367,12 @@ async function scheduleNotification(ev) {}
 
       // Registrar SW al montar (antes de cargar Firebase)
       useEffect(() => {
-        registerServiceWorker().then(reg => {
-          // Si ya tiene permiso, sincronizar eventos locales mientras carga Firebase
+        registerServiceWorker().then(async reg => {
+          // Si ya tiene permiso, sincronizar eventos y refrescar token FCM en Firestore
           if (reg && Notification.permission === 'granted') {
             const cached = loadEvents();
             if (cached.length > 0) syncEventsToSW(cached);
+            if (window._registrarTokenFCM) await window._registrarTokenFCM();
           }
         });
       }, []);
