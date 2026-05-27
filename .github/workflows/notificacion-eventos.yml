@@ -1,3 +1,4 @@
+
 name: Notificacion Eventos 9AM
 
 'on':
@@ -12,7 +13,6 @@ jobs:
       - name: Verificar eventos y notificar
         env:
           FIREBASE_PROJECT_ID: ${{ secrets.OF_FIREBASE_PROJECT_ID }}
-          FIREBASE_API_KEY: ${{ secrets.OF_FIREBASE_API_KEY }}
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.OF_FIREBASE_SERVICE_ACCOUNT }}
         run: |
           node << 'EOF'
@@ -24,13 +24,14 @@ jobs:
               .replace(/\+/g,'-').replace(/\//g,'_').replace(/=/g,'');
           }
 
+          // Scope ampliado: cubre FCM + Firestore con un solo token OAuth
           function getGoogleToken(sa) {
             return new Promise((resolve, reject) => {
               const now = Math.floor(Date.now() / 1000);
               const header  = { alg: 'RS256', typ: 'JWT' };
               const payload = {
                 iss:   sa.client_email,
-                scope: 'https://www.googleapis.com/auth/firebase.messaging',
+                scope: 'https://www.googleapis.com/auth/firebase.messaging https://www.googleapis.com/auth/datastore',
                 aud:   'https://oauth2.googleapis.com/token',
                 iat:   now,
                 exp:   now + 3600
@@ -60,10 +61,15 @@ jobs:
             });
           }
 
-          function firestoreGet(projectId, apiKey, collection) {
+          // Lee una coleccion de Firestore usando Bearer token (soporta reglas de seguridad con auth)
+          function firestoreGet(projectId, accessToken, collection) {
             return new Promise((resolve, reject) => {
-              const path = '/v1/projects/' + projectId + '/databases/(default)/documents/' + collection + '?key=' + apiKey;
-              https.get({ hostname: 'firestore.googleapis.com', path }, (res) => {
+              const path = '/v1/projects/' + projectId + '/databases/(default)/documents/' + collection;
+              https.get({
+                hostname: 'firestore.googleapis.com',
+                path,
+                headers: { 'Authorization': 'Bearer ' + accessToken }
+              }, (res) => {
                 let d = '';
                 res.on('data', c => d += c);
                 res.on('end', () => { try { resolve(JSON.parse(d)); } catch(e) { reject(e); } });
@@ -71,10 +77,11 @@ jobs:
             });
           }
 
-          // Borrar token invalido de Firestore usando la API REST con autenticacion
-          function firestoreDelete(projectId, accessToken, docPath) {
+          // Elimina un documento de Firestore usando su nombre de recurso completo
+          // Esto limpia tokens expirados o inválidos para que no se acumulen
+          function firestoreDelete(accessToken, docName) {
             return new Promise((resolve) => {
-              const path = '/v1/projects/' + projectId + '/databases/(default)/documents/' + docPath;
+              const path = '/v1/' + docName;
               const req = https.request({
                 hostname: 'firestore.googleapis.com',
                 path,
@@ -84,15 +91,16 @@ jobs:
                 let d = '';
                 res.on('data', c => d += c);
                 res.on('end', () => {
-                  console.log('Token invalido eliminado: ' + docPath.split('/').pop().substring(0,20) + '...');
+                  console.log('Token inválido eliminado de Firestore (status ' + res.statusCode + ')');
                   resolve();
                 });
               });
-              req.on('error', () => resolve()); // Si falla no bloquear
+              req.on('error', (e) => { console.warn('Error eliminando token: ' + e.message); resolve(); });
               req.end();
             });
           }
 
+          // Envía notificación FCM y devuelve si el token es inválido para poder eliminarlo
           function fcmSend(projectId, accessToken, token, titulo, cuerpo) {
             return new Promise((resolve, reject) => {
               const body = JSON.stringify({
@@ -117,7 +125,23 @@ jobs:
               }, (res) => {
                 let r = '';
                 res.on('data', c => r += c);
-                res.on('end', () => { resolve(r); });
+                res.on('end', () => {
+                  let parsed = {};
+                  try { parsed = JSON.parse(r); } catch(_) {}
+
+                  if (parsed.error) {
+                    // Detectar si el token está expirado, desinstalado o inválido
+                    const details = parsed.error.details || [];
+                    const fcmError = details.find(d => d.errorCode);
+                    const errorCode = fcmError ? fcmError.errorCode : parsed.error.status;
+                    const isInvalidToken = ['UNREGISTERED', 'INVALID_ARGUMENT'].includes(errorCode);
+                    console.log('FCM error [' + errorCode + '] token: ' + token.substring(0, 20) + '...');
+                    resolve({ invalid: isInvalidToken });
+                  } else {
+                    console.log('FCM OK: ' + token.substring(0, 20) + '...');
+                    resolve({ invalid: false });
+                  }
+                });
               });
               req.on('error', reject);
               req.write(body);
@@ -126,19 +150,26 @@ jobs:
           }
 
           async function main() {
-            // Hora fija Uruguay UTC-3 (no cambia horario de verano)
             const ahora     = new Date();
             const localTime = new Date(ahora.getTime() + (-3 * 60 * 60000));
             const dia       = String(localTime.getUTCDate()).padStart(2,'0');
             const mes       = String(localTime.getUTCMonth() + 1).padStart(2,'0');
             const fechaHoy  = mes + '-' + dia;
             const projectId = process.env.FIREBASE_PROJECT_ID;
-            const apiKey    = process.env.FIREBASE_API_KEY;
 
-            console.log('Fecha Uruguay (UTC-3 fijo): ' + fechaHoy);
+            console.log('Fecha Uruguay: ' + fechaHoy);
+
+            // Obtener token Google PRIMERO (necesario para Firestore y FCM)
+            const sa = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+            const accessToken = await getGoogleToken(sa);
+            console.log('Token Google OK');
 
             // 1. Eventos de hoy
-            const eventosData = await firestoreGet(projectId, apiKey, 'eventos');
+            const eventosData = await firestoreGet(projectId, accessToken, 'eventos');
+            if (eventosData.error) {
+              console.error('Error leyendo eventos:', JSON.stringify(eventosData.error));
+              process.exit(1);
+            }
             const eventos = (eventosData.documents || []).map(doc => {
               const f = doc.fields || {};
               return {
@@ -151,49 +182,43 @@ jobs:
             if (eventos.length === 0) { console.log('Hoy no hay eventos.'); return; }
             console.log('Eventos hoy: ' + eventos.map(e => e.nombre).join(', '));
 
-            // 2. Tokens FCM
-            const tokensData = await firestoreGet(projectId, apiKey, 'fcm_tokens');
-            const tokenDocs  = (tokensData.documents || []).map(doc => ({
-              path:  doc.name.split('/documents/')[1],
-              token: (doc.fields && doc.fields.token && doc.fields.token.stringValue) || ''
-            })).filter(t => t.token.length > 0);
+            // 2. Tokens FCM — guardamos también el nombre de documento para poder eliminar los inválidos
+            const tokensData = await firestoreGet(projectId, accessToken, 'fcm_tokens');
+            if (tokensData.error) {
+              console.error('Error leyendo tokens:', JSON.stringify(tokensData.error));
+              process.exit(1);
+            }
+            const tokenDocs = (tokensData.documents || []).map(doc => ({
+              token:   (doc.fields && doc.fields.token && doc.fields.token.stringValue) || '',
+              docName: doc.name
+            })).filter(d => d.token.length > 0);
 
             if (tokenDocs.length === 0) { console.log('No hay tokens FCM registrados.'); return; }
-            console.log('Tokens encontrados: ' + tokenDocs.length);
+            console.log('Tokens registrados: ' + tokenDocs.length);
 
-            // 3. Access token Google
-            const sa = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
-            const accessToken = await getGoogleToken(sa);
-            console.log('Token Google OK');
+            // 3. Enviar notificaciones y rastrear tokens inválidos
+            const tokenesInvalidos = new Set();
 
-            // 4. Enviar FCM y limpiar tokens invalidos automaticamente
-            const tokensInvalidos = [];
             for (const ev of eventos) {
               const msg = 'Hoy: ' + ev.tipo + ' de ' + ev.nombre;
               console.log('Enviando: ' + msg);
               for (const td of tokenDocs) {
-                const respuesta = await fcmSend(projectId, accessToken, td.token, 'Oriente Fraterno 148', msg);
-                const parsed = JSON.parse(respuesta);
-                if (parsed.error && parsed.error.status === 'NOT_FOUND') {
-                  // Token invalido - marcar para borrar (solo una vez por token)
-                  if (!tokensInvalidos.includes(td.path)) {
-                    tokensInvalidos.push(td.path);
-                  }
-                } else {
-                  console.log('Enviado OK a token: ' + td.token.substring(0,20) + '...');
+                const result = await fcmSend(projectId, accessToken, td.token, 'Oriente Fraterno 148', msg);
+                if (result.invalid) {
+                  tokenesInvalidos.add(td.docName);
                 }
               }
             }
 
-            // 5. Borrar tokens invalidos de Firestore
-            if (tokensInvalidos.length > 0) {
-              console.log('Limpiando ' + tokensInvalidos.length + ' token(s) invalido(s)...');
-              for (const path of tokensInvalidos) {
-                await firestoreDelete(projectId, accessToken, path);
+            // 4. Limpiar tokens inválidos/expirados de Firestore
+            if (tokenesInvalidos.size > 0) {
+              console.log('Limpiando ' + tokenesInvalidos.size + ' token(s) inválido(s)...');
+              for (const docName of tokenesInvalidos) {
+                await firestoreDelete(accessToken, docName);
               }
-            } else {
-              console.log('Todos los tokens son validos.');
             }
+
+            console.log('Proceso completado.');
           }
 
           main().catch(e => { console.error('Error: ' + e.message); process.exit(1); });
