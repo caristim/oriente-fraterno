@@ -1,4 +1,3 @@
-
 name: Notificacion Eventos 9AM
 
 'on':
@@ -61,7 +60,7 @@ jobs:
             });
           }
 
-          // Lee una coleccion de Firestore usando Bearer token (soporta reglas de seguridad con auth)
+          // Lee una coleccion de Firestore usando Bearer token
           function firestoreGet(projectId, accessToken, collection) {
             return new Promise((resolve, reject) => {
               const path = '/v1/projects/' + projectId + '/databases/(default)/documents/' + collection;
@@ -77,8 +76,7 @@ jobs:
             });
           }
 
-          // Elimina un documento de Firestore usando su nombre de recurso completo
-          // Esto limpia tokens expirados o inválidos para que no se acumulen
+          // Elimina un documento de Firestore (limpia tokens expirados o invalidos)
           function firestoreDelete(accessToken, docName) {
             return new Promise((resolve) => {
               const path = '/v1/' + docName;
@@ -91,7 +89,7 @@ jobs:
                 let d = '';
                 res.on('data', c => d += c);
                 res.on('end', () => {
-                  console.log('Token inválido eliminado de Firestore (status ' + res.statusCode + ')');
+                  console.log('Token invalido eliminado de Firestore (status ' + res.statusCode + ')');
                   resolve();
                 });
               });
@@ -100,18 +98,25 @@ jobs:
             });
           }
 
-          // Envía notificación FCM y devuelve si el token es inválido para poder eliminarlo
+          // Envia notificacion FCM como mensaje data-only (CRITICO para background)
+          // Con notification en el payload raiz, algunos navegadores muestran la
+          // notificacion sin pasar por el Service Worker y la ignoran en background.
+          // Con data-only, el push siempre llega al SW que lo muestra correctamente.
           function fcmSend(projectId, accessToken, token, titulo, cuerpo) {
             return new Promise((resolve, reject) => {
               const body = JSON.stringify({
                 message: {
                   token,
-                  notification: { title: titulo, body: cuerpo },
+                  // NOTA: No usar el campo "notification" aqui.
+                  // Usar solo "data" para forzar que el Service Worker maneje
+                  // el push en background (app cerrada o en segundo plano).
+                  data: {
+                    title: titulo,
+                    body:  cuerpo
+                  },
                   webpush: {
-                    notification: {
-                      icon:               'https://caristim.github.io/oriente-fraterno/icon-192.png',
-                      requireInteraction: true,
-                      vibrate:            [200, 100, 200]
+                    headers: {
+                      Urgency: 'high'
                     },
                     fcm_options: { link: 'https://caristim.github.io/oriente-fraterno/' }
                   }
@@ -130,7 +135,6 @@ jobs:
                   try { parsed = JSON.parse(r); } catch(_) {}
 
                   if (parsed.error) {
-                    // Detectar si el token está expirado, desinstalado o inválido
                     const details = parsed.error.details || [];
                     const fcmError = details.find(d => d.errorCode);
                     const errorCode = fcmError ? fcmError.errorCode : parsed.error.status;
@@ -151,6 +155,7 @@ jobs:
 
           async function main() {
             const ahora     = new Date();
+            // Uruguay: UTC-3 todo el año (sin horario de verano desde 2015)
             const localTime = new Date(ahora.getTime() + (-3 * 60 * 60000));
             const dia       = String(localTime.getUTCDate()).padStart(2,'0');
             const mes       = String(localTime.getUTCMonth() + 1).padStart(2,'0');
@@ -182,7 +187,7 @@ jobs:
             if (eventos.length === 0) { console.log('Hoy no hay eventos.'); return; }
             console.log('Eventos hoy: ' + eventos.map(e => e.nombre).join(', '));
 
-            // 2. Tokens FCM — guardamos también el nombre de documento para poder eliminar los inválidos
+            // 2. Tokens FCM
             const tokensData = await firestoreGet(projectId, accessToken, 'fcm_tokens');
             if (tokensData.error) {
               console.error('Error leyendo tokens:', JSON.stringify(tokensData.error));
@@ -196,7 +201,7 @@ jobs:
             if (tokenDocs.length === 0) { console.log('No hay tokens FCM registrados.'); return; }
             console.log('Tokens registrados: ' + tokenDocs.length);
 
-            // 3. Enviar notificaciones y rastrear tokens inválidos
+            // 3. Enviar notificaciones y rastrear tokens invalidos
             const tokenesInvalidos = new Set();
 
             for (const ev of eventos) {
@@ -210,9 +215,9 @@ jobs:
               }
             }
 
-            // 4. Limpiar tokens inválidos/expirados de Firestore
+            // 4. Limpiar tokens invalidos/expirados de Firestore
             if (tokenesInvalidos.size > 0) {
-              console.log('Limpiando ' + tokenesInvalidos.size + ' token(s) inválido(s)...');
+              console.log('Limpiando ' + tokenesInvalidos.size + ' token(s) invalido(s)...');
               for (const docName of tokenesInvalidos) {
                 await firestoreDelete(accessToken, docName);
               }
