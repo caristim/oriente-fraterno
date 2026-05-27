@@ -1,10 +1,10 @@
-// Oriente Fraterno 148 - Service Worker v8
+// Oriente Fraterno 148 - Service Worker v9
 // Maneja notificaciones FCM en background y logica local de respaldo
 
 importScripts('https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js');
 importScripts('https://www.gstatic.com/firebasejs/10.8.0/firebase-messaging-compat.js');
 
-const SW_VERSION = 'of-sw-v8';
+const SW_VERSION = 'of-sw-v9';
 const DB_NAME    = 'of_sw';
 const DB_VERSION = 1;
 
@@ -23,6 +23,9 @@ const fcmMessaging = firebase.messaging();
 // Este es el handler principal. Se ejecuta aunque la app esté completamente
 // cerrada. El SDK de Firebase compat NO maneja este caso por sí solo cuando
 // el payload viene como data-only desde el servidor.
+// Además de mostrar la notificación, marca en IndexedDB los eventos como
+// "ya notificados hoy" para que checkAndNotify no repita la notificación
+// si el usuario abre la app más tarde en el mismo día.
 self.addEventListener('push', e => {
   if (!e.data) return;
 
@@ -58,7 +61,7 @@ self.addEventListener('push', e => {
       tag:                'of-fcm',
       data:               { url: 'https://caristim.github.io/oriente-fraterno/' },
       actions:            [{ action: 'open', title: 'Ver app' }],
-    })
+    }).then(() => markFcmFiredToday(cuerpo))
   );
 });
 
@@ -84,8 +87,43 @@ fcmMessaging.onBackgroundMessage(payload => {
     tag:                'of-fcm',
     data:               { url: 'https://caristim.github.io/oriente-fraterno/' },
     actions:            [{ action: 'open', title: 'Ver app' }],
-  });
+  }).then(() => markFcmFiredToday(cuerpo));
 });
+
+// ── Marca en fired los eventos notificados por FCM ────────────────────────────
+// Evita que checkAndNotify repita la notificación si el usuario abre la app
+// más tarde en el mismo día (el push ya llegó a las 9 AM con app cerrada).
+// El cuerpo viene con formato "Hoy: <tipo> de <nombre>"; se usa como clave
+// genérica del día para marcar todos los eventos notificados vía FCM.
+async function markFcmFiredToday(cuerpo) {
+  try {
+    const events = await dbGet('events');
+    if (!Array.isArray(events) || events.length === 0) return;
+    const now   = new Date();
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const fired = (await dbGet('fired')) || {};
+    let changed = false;
+    for (const ev of events) {
+      if (!ev.fecha || !ev.nombre || !ev.tipo) continue;
+      const parts = String(ev.fecha).split('-');
+      let month, day;
+      if (parts.length === 2) [month, day] = parts.map(Number);
+      else if (parts.length === 3) [, month, day] = parts.map(Number);
+      else continue;
+      if (!month || !day) continue;
+      const evDay   = new Date(now.getFullYear(), month - 1, day);
+      const isToday = evDay.getTime() === today.getTime();
+      if (!isToday) continue;
+      const evId    = ev.docId || ev.id || `${ev.nombre}-${ev.fecha}`;
+      const fireKey = `${evId}-${now.getFullYear()}`;
+      if (!fired[fireKey]) {
+        fired[fireKey] = true;
+        changed = true;
+      }
+    }
+    if (changed) await dbSet('fired', fired);
+  } catch (err) { console.warn('[SW] markFcmFiredToday error:', err); }
+}
 
 // ── IndexedDB helpers ─────────────────────────────────────────────────────────
 function openDB() {
@@ -158,6 +196,8 @@ self.addEventListener('notificationclick', e => {
 });
 
 // ── Notificacion local de respaldo (cuando el usuario abre la app) ────────────
+// Solo se dispara si el push FCM no llegó (app sin conexión a las 9 AM, etc.)
+// El sistema fired[] impide duplicar si ya se notificó vía FCM o localmente.
 async function checkAndNotify() {
   try {
     const events = await dbGet('events');
