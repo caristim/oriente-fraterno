@@ -1,10 +1,10 @@
-// Oriente Fraterno 148 - Service Worker v7
+// Oriente Fraterno 148 - Service Worker v8
 // Maneja notificaciones FCM en background y logica local de respaldo
 
 importScripts('https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js');
 importScripts('https://www.gstatic.com/firebasejs/10.8.0/firebase-messaging-compat.js');
 
-const SW_VERSION = 'of-sw-v7';
+const SW_VERSION = 'of-sw-v8';
 const DB_NAME    = 'of_sw';
 const DB_VERSION = 1;
 
@@ -19,11 +19,62 @@ firebase.initializeApp({
 
 const fcmMessaging = firebase.messaging();
 
-// Mostrar notificacion cuando llega push de GitHub Actions via FCM
+// ── Listener nativo 'push' (CRÍTICO para background con app cerrada) ─────────
+// Este es el handler principal. Se ejecuta aunque la app esté completamente
+// cerrada. El SDK de Firebase compat NO maneja este caso por sí solo cuando
+// el payload viene como data-only desde el servidor.
+self.addEventListener('push', e => {
+  if (!e.data) return;
+
+  let titulo = 'Oriente Fraterno 148';
+  let cuerpo = 'Hoy hay un evento';
+
+  try {
+    const payload = e.data.json();
+    // Soporte para payload data-only (enviado desde GitHub Actions)
+    if (payload.data) {
+      titulo = payload.data.title  || titulo;
+      cuerpo = payload.data.body   || cuerpo;
+    }
+    // Soporte para payload con notification (fallback)
+    if (payload.notification) {
+      titulo = payload.notification.title || titulo;
+      cuerpo = payload.notification.body  || cuerpo;
+    }
+  } catch (_) {
+    // Si no es JSON válido intentar como texto plano
+    try { cuerpo = e.data.text() || cuerpo; } catch (__) {}
+  }
+
+  console.log('[SW-push] Notificación recibida:', titulo, cuerpo);
+
+  e.waitUntil(
+    self.registration.showNotification(titulo, {
+      body:               cuerpo,
+      icon:               './icon-192.png',
+      badge:              './icon-192.png',
+      requireInteraction: true,
+      vibrate:            [200, 100, 200, 100, 200],
+      tag:                'of-fcm',
+      data:               { url: 'https://caristim.github.io/oriente-fraterno/' },
+      actions:            [{ action: 'open', title: 'Ver app' }],
+    })
+  );
+});
+
+// ── onBackgroundMessage de Firebase (respaldo cuando el SDK intercepta primero) ─
+// Esto cubre el caso en que el SDK de Firebase compat captura el push antes
+// que el listener nativo (solo ocurre cuando la app está parcialmente activa).
 fcmMessaging.onBackgroundMessage(payload => {
-  console.log('[SW-FCM] push recibido:', payload);
-  const titulo = (payload.notification && payload.notification.title) || 'Oriente Fraterno 148';
-  const cuerpo = (payload.notification && payload.notification.body)  || 'Hoy hay un evento';
+  console.log('[SW-FCM] onBackgroundMessage recibido:', payload);
+  // Si ya fue mostrado por el listener nativo 'push', no duplicar.
+  // Firebase solo llama a esto cuando el push NO fue manejado antes.
+  const titulo = (payload.data && payload.data.title)
+    || (payload.notification && payload.notification.title)
+    || 'Oriente Fraterno 148';
+  const cuerpo = (payload.data && payload.data.body)
+    || (payload.notification && payload.notification.body)
+    || 'Hoy hay un evento';
   return self.registration.showNotification(titulo, {
     body:               cuerpo,
     icon:               './icon-192.png',
@@ -31,11 +82,12 @@ fcmMessaging.onBackgroundMessage(payload => {
     requireInteraction: true,
     vibrate:            [200, 100, 200, 100, 200],
     tag:                'of-fcm',
-    actions: [{ action: 'open', title: 'Ver app' }],
+    data:               { url: 'https://caristim.github.io/oriente-fraterno/' },
+    actions:            [{ action: 'open', title: 'Ver app' }],
   });
 });
 
-// IndexedDB helpers
+// ── IndexedDB helpers ─────────────────────────────────────────────────────────
 function openDB() {
   return new Promise((res, rej) => {
     const req = indexedDB.open(DB_NAME, DB_VERSION);
@@ -66,11 +118,11 @@ async function dbSet(key, value) {
   });
 }
 
-// Lifecycle
+// ── Lifecycle ─────────────────────────────────────────────────────────────────
 self.addEventListener('install', () => { console.log('[SW]', SW_VERSION); self.skipWaiting(); });
 self.addEventListener('activate', e => { e.waitUntil(self.clients.claim().then(() => checkAndNotify())); });
 
-// Mensajes desde la app
+// ── Mensajes desde la app ─────────────────────────────────────────────────────
 self.addEventListener('message', async e => {
   if (!e.data) return;
   if (e.data.type === 'SCHEDULE_EVENTS') {
@@ -81,28 +133,31 @@ self.addEventListener('message', async e => {
   if (e.data.type === 'CHECK_NOW') await checkAndNotify();
 });
 
-// Background sync
+// ── Background sync ───────────────────────────────────────────────────────────
 self.addEventListener('periodicsync', e => { if (e.tag === 'of-daily-check') e.waitUntil(checkAndNotify()); });
 self.addEventListener('sync', e => { if (e.tag === 'of-check') e.waitUntil(checkAndNotify()); });
 
-// Fetch
+// ── Fetch ─────────────────────────────────────────────────────────────────────
 self.addEventListener('fetch', e => {
   if (e.request.mode === 'navigate') checkAndNotify().catch(console.warn);
   e.respondWith(fetch(e.request).catch(() => new Response('Sin conexion', { status: 503 })));
 });
 
-// Clic en notificacion
+// ── Clic en notificacion ──────────────────────────────────────────────────────
 self.addEventListener('notificationclick', e => {
   e.notification.close();
+  const targetUrl = (e.notification.data && e.notification.data.url)
+    || 'https://caristim.github.io/oriente-fraterno/';
   e.waitUntil(
     self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(clients => {
-      if (clients.length) return clients[0].focus();
-      return self.clients.openWindow('./');
+      const appClient = clients.find(c => c.url.includes('oriente-fraterno'));
+      if (appClient) return appClient.focus();
+      return self.clients.openWindow(targetUrl);
     })
   );
 });
 
-// Notificacion local de respaldo (cuando el usuario abre la app)
+// ── Notificacion local de respaldo (cuando el usuario abre la app) ────────────
 async function checkAndNotify() {
   try {
     const events = await dbGet('events');
