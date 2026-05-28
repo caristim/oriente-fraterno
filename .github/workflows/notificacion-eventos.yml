@@ -1,60 +1,263 @@
 name: Notificacion Eventos 9AM
 
-on:
+'on':
   schedule:
-    - cron: '0 12 * * *'
-  workflow_dispatch:
+    - cron: '0 12 * * *'   # 09:00 Uruguay (UTC-3, sin horario de verano desde 2015)
+  workflow_dispatch:         # Permite ejecutar manualmente para probar
 
 jobs:
   enviar-notificacion:
     runs-on: ubuntu-latest
-
     steps:
-      - name: Enviar notificaciones
+      - name: Verificar eventos y notificar
         env:
           FIREBASE_PROJECT_ID: ${{ secrets.OF_FIREBASE_PROJECT_ID }}
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.OF_FIREBASE_SERVICE_ACCOUNT }}
-
         run: |
           node << 'EOF'
-
-          const https = require('https');
+          const https  = require('https');
           const crypto = require('crypto');
 
-          function base64url(input) {
-            return Buffer.from(JSON.stringify(input))
-              .toString('base64')
-              .replace(/=/g, '')
-              .replace(/\+/g, '-')
-              .replace(/\//g, '_');
+          function base64url(str) {
+            return Buffer.from(str).toString('base64')
+              .replace(/\+/g,'-').replace(/\//g,'_').replace(/=/g,'');
           }
 
-          async function getAccessToken(sa) {
-            const now = Math.floor(Date.now() / 1000);
+          // Scope ampliado: cubre FCM + Firestore con un solo token OAuth
+          function getGoogleToken(sa) {
+            return new Promise((resolve, reject) => {
+              const now = Math.floor(Date.now() / 1000);
+              const header  = { alg: 'RS256', typ: 'JWT' };
+              const payload = {
+                iss:   sa.client_email,
+                scope: 'https://www.googleapis.com/auth/firebase.messaging https://www.googleapis.com/auth/datastore',
+                aud:   'https://oauth2.googleapis.com/token',
+                iat:   now,
+                exp:   now + 3600
+              };
+              const data = base64url(JSON.stringify(header)) + '.' + base64url(JSON.stringify(payload));
+              const sign = crypto.createSign('RSA-SHA256');
+              sign.update(data);
+              const jwt = data + '.' + sign.sign(sa.private_key, 'base64')
+                .replace(/\+/g,'-').replace(/\//g,'_').replace(/=/g,'');
+              const body = 'grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer&assertion=' + jwt;
+              const req = https.request({
+                hostname: 'oauth2.googleapis.com',
+                path: '/token',
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
+              }, (res) => {
+                let d = '';
+                res.on('data', c => d += c);
+                res.on('end', () => {
+                  const p = JSON.parse(d);
+                  p.access_token ? resolve(p.access_token) : reject(new Error('Token error: ' + d));
+                });
+              });
+              req.on('error', reject);
+              req.write(body);
+              req.end();
+            });
+          }
 
-            const header = {
-              alg: 'RS256',
-              typ: 'JWT'
-            };
+          // Lee una coleccion de Firestore con soporte de paginacion
+          function firestoreGetPage(projectId, accessToken, collection, pageToken) {
+            return new Promise((resolve, reject) => {
+              let path = '/v1/projects/' + projectId + '/databases/(default)/documents/' + collection + '?pageSize=300';
+              if (pageToken) path += '&pageToken=' + encodeURIComponent(pageToken);
+              https.get({
+                hostname: 'firestore.googleapis.com',
+                path,
+                headers: { 'Authorization': 'Bearer ' + accessToken }
+              }, (res) => {
+                let d = '';
+                res.on('data', c => d += c);
+                res.on('end', () => { try { resolve(JSON.parse(d)); } catch(e) { reject(e); } });
+              }).on('error', reject);
+            });
+          }
 
-            const payload = {
-              iss: sa.client_email,
-              scope: 'https://www.googleapis.com/auth/firebase.messaging https://www.googleapis.com/auth/datastore',
-              aud: 'https://oauth2.googleapis.com/token',
-              exp: now + 3600,
-              iat: now
-            };
+          // Lee todos los documentos de una coleccion, manejando paginacion automaticamente
+          async function firestoreGetAll(projectId, accessToken, collection) {
+            let allDocuments = [];
+            let pageToken = null;
+            do {
+              const data = await firestoreGetPage(projectId, accessToken, collection, pageToken);
+              if (data.error) return data; // devolver el error para manejarlo arriba
+              allDocuments = allDocuments.concat(data.documents || []);
+              pageToken = data.nextPageToken || null;
+            } while (pageToken);
+            return { documents: allDocuments };
+          }
 
-            const unsigned = `${base64url(header)}.${base64url(payload)}`;
+          // Elimina un documento de Firestore (limpia tokens expirados o invalidos)
+          function firestoreDelete(accessToken, docName) {
+            return new Promise((resolve) => {
+              const path = '/v1/' + docName;
+              const req = https.request({
+                hostname: 'firestore.googleapis.com',
+                path,
+                method: 'DELETE',
+                headers: { 'Authorization': 'Bearer ' + accessToken }
+              }, (res) => {
+                let d = '';
+                res.on('data', c => d += c);
+                res.on('end', () => {
+                  console.log('Token invalido eliminado de Firestore (status ' + res.statusCode + ')');
+                  resolve();
+                });
+              });
+              req.on('error', (e) => { console.warn('Error eliminando token: ' + e.message); resolve(); });
+              req.end();
+            });
+          }
 
-            const signer = crypto.createSign('RSA-SHA256');
-            signer.update(unsigned);
+          // Envia notificacion FCM con payload data-only.
+          // Se usa unicamente "data" en el nivel raiz para que el Service Worker
+          // maneje la notificacion en todos los dispositivos.
+          // El bloque "android.notification" fue eliminado porque convertia el
+          // mensaje en "notification+data", causando notificaciones duplicadas
+          // en Android (una del sistema y otra del Service Worker).
+          function fcmSend(projectId, accessToken, token, titulo, cuerpo) {
+            return new Promise((resolve, reject) => {
+              const body = JSON.stringify({
+                message: {
+                  token,
+                  data: {
+                    title: titulo,
+                    body:  cuerpo,
+                    click_action: 'https://caristim.github.io/oriente-fraterno/'
+                  },
+                  android: {
+                    priority: 'high'
+                  },
+                  apns: {
+                    headers: {
+                      'apns-priority': '10'
+                    },
+                    payload: {
+                      aps: {
+                        alert: {
+                          title: titulo,
+                          body:  cuerpo
+                        },
+                        sound: 'default',
+                        badge: 1,
+                        'content-available': 1
+                      }
+                    }
+                  },
+                  webpush: {
+                    headers: {
+                      Urgency: 'high'
+                    },
+                    fcm_options: { link: 'https://caristim.github.io/oriente-fraterno/' }
+                  }
+                }
+              });
+              const req = https.request({
+                hostname: 'fcm.googleapis.com',
+                path:     '/v1/projects/' + projectId + '/messages:send',
+                method:   'POST',
+                headers:  { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + accessToken }
+              }, (res) => {
+                let r = '';
+                res.on('data', c => r += c);
+                res.on('end', () => {
+                  let parsed = {};
+                  try { parsed = JSON.parse(r); } catch(_) {}
 
-            const signature = signer
-              .sign(sa.private_key, 'base64')
-              .replace(/=/g, '')
-              .replace(/\+/g, '-')
-              .replace(/\//g, '_');
+                  if (parsed.error) {
+                    const details = parsed.error.details || [];
+                    const fcmError = details.find(d => d.errorCode);
+                    const errorCode = fcmError ? fcmError.errorCode : parsed.error.status;
+                    const isInvalidToken = ['UNREGISTERED', 'INVALID_ARGUMENT'].includes(errorCode);
+                    console.log('FCM error [' + errorCode + '] token: ' + token.substring(0, 20) + '...');
+                    resolve({ invalid: isInvalidToken });
+                  } else {
+                    console.log('FCM OK: ' + token.substring(0, 20) + '...');
+                    resolve({ invalid: false });
+                  }
+                });
+              });
+              req.on('error', reject);
+              req.write(body);
+              req.end();
+            });
+          }
 
-            const jwt = `${unsigned}.${signature}`;
+          async function main() {
+            const ahora     = new Date();
+            // Uruguay: UTC-3 todo el ano (sin horario de verano desde 2015)
+            const localTime = new Date(ahora.getTime() + (-3 * 60 * 60000));
+            const dia       = String(localTime.getUTCDate()).padStart(2,'0');
+            const mes       = String(localTime.getUTCMonth() + 1).padStart(2,'0');
+            const fechaHoy  = mes + '-' + dia;
+            const projectId = process.env.FIREBASE_PROJECT_ID;
+
+            console.log('Fecha Uruguay: ' + fechaHoy);
+
+            // Obtener token Google PRIMERO (necesario para Firestore y FCM)
+            const sa = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+            const accessToken = await getGoogleToken(sa);
+            console.log('Token Google OK');
+
+            // 1. Eventos de hoy (con paginacion)
+            const eventosData = await firestoreGetAll(projectId, accessToken, 'eventos');
+            if (eventosData.error) {
+              console.error('Error leyendo eventos:', JSON.stringify(eventosData.error));
+              process.exit(1);
+            }
+            const eventos = (eventosData.documents || []).map(doc => {
+              const f = doc.fields || {};
+              return {
+                nombre: (f.nombre && f.nombre.stringValue) || '',
+                fecha:  (f.fecha  && f.fecha.stringValue)  || '',
+                tipo:   (f.tipo   && f.tipo.stringValue)   || ''
+              };
+            }).filter(e => e.fecha === fechaHoy);
+
+            if (eventos.length === 0) { console.log('Hoy no hay eventos.'); return; }
+            console.log('Eventos hoy: ' + eventos.map(e => e.nombre).join(', '));
+
+            // 2. Tokens FCM (con paginacion)
+            const tokensData = await firestoreGetAll(projectId, accessToken, 'fcm_tokens');
+            if (tokensData.error) {
+              console.error('Error leyendo tokens:', JSON.stringify(tokensData.error));
+              process.exit(1);
+            }
+            const tokenDocs = (tokensData.documents || []).map(doc => ({
+              token:   (doc.fields && doc.fields.token && doc.fields.token.stringValue) || '',
+              docName: doc.name
+            })).filter(d => d.token.length > 0);
+
+            if (tokenDocs.length === 0) { console.log('No hay tokens FCM registrados.'); return; }
+            console.log('Tokens registrados: ' + tokenDocs.length);
+
+            // 3. Enviar notificaciones y rastrear tokens invalidos
+            const tokenesInvalidos = new Set();
+
+            for (const ev of eventos) {
+              const msg = 'Hoy: ' + ev.tipo + ' de ' + ev.nombre;
+              console.log('Enviando: ' + msg);
+              for (const td of tokenDocs) {
+                const result = await fcmSend(projectId, accessToken, td.token, 'Oriente Fraterno 148', msg);
+                if (result.invalid) {
+                  tokenesInvalidos.add(td.docName);
+                }
+              }
+            }
+
+            // 4. Limpiar tokens invalidos/expirados de Firestore
+            if (tokenesInvalidos.size > 0) {
+              console.log('Limpiando ' + tokenesInvalidos.size + ' token(s) invalido(s)...');
+              for (const docName of tokenesInvalidos) {
+                await firestoreDelete(accessToken, docName);
+              }
+            }
+
+            console.log('Proceso completado.');
+          }
+
+          main().catch(e => { console.error('Error: ' + e.message); process.exit(1); });
           EOF
