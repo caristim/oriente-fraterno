@@ -1,10 +1,10 @@
-// Oriente Fraterno 148 - Service Worker v10
+// Oriente Fraterno 148 - Service Worker v11
 // Maneja notificaciones FCM en background y logica local de respaldo
 
 importScripts('https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js');
 importScripts('https://www.gstatic.com/firebasejs/10.8.0/firebase-messaging-compat.js');
 
-const SW_VERSION = 'of-sw-v10';
+const SW_VERSION = 'of-sw-v11';
 const DB_NAME    = 'of_sw';
 const DB_VERSION = 1;
 
@@ -18,14 +18,29 @@ firebase.initializeApp({
 });
 
 // Inicializar el SDK de Firebase Messaging en el SW.
-// NO se registra onBackgroundMessage porque el handler nativo 'push'
-// ya cubre todos los casos y evita la doble ejecucion.
-firebase.messaging();
+const messaging = firebase.messaging();
 
-// ── Handler nativo 'push' (UNICO handler de notificaciones) ───────────────────
-// Se ejecuta aunque la app este completamente cerrada.
-// Al ser el UNICO handler, evita condiciones de carrera y notificaciones
-// duplicadas que ocurrian cuando coexistia con onBackgroundMessage.
+// Handler para mensajes en background (FCM)
+messaging.onBackgroundMessage((payload) => {
+  console.log('[SW] Mensaje en background recibido:', payload);
+  const titulo = payload.data?.title || payload.notification?.title || 'Oriente Fraterno 148';
+  const cuerpo = payload.data?.body || payload.notification?.body || 'Hoy hay un evento';
+  
+  const notificationOptions = {
+    body: cuerpo,
+    icon: './icon-192.png',
+    badge: './icon-192.png',
+    tag: 'of-fcm',
+    data: { url: 'https://caristim.github.io/oriente-fraterno/' },
+    requireInteraction: true,
+    vibrate: [200, 100, 200, 100, 200]
+  };
+
+  return self.registration.showNotification(titulo, notificationOptions)
+    .then(() => markFcmFiredToday(cuerpo));
+});
+
+// ── Handler nativo 'push' (Respaldo para otros navegadores) ───────────────────
 self.addEventListener('push', e => {
   if (!e.data) return;
 
@@ -34,18 +49,14 @@ self.addEventListener('push', e => {
 
   try {
     const payload = e.data.json();
-    // Soporte para payload data-only (enviado desde GitHub Actions)
     if (payload.data) {
       titulo = payload.data.title  || titulo;
       cuerpo = payload.data.body   || cuerpo;
-    }
-    // Soporte para payload con notification (fallback)
-    if (payload.notification) {
+    } else if (payload.notification) {
       titulo = payload.notification.title || titulo;
       cuerpo = payload.notification.body  || cuerpo;
     }
   } catch (_) {
-    // Si no es JSON valido intentar como texto plano
     try { cuerpo = e.data.text() || cuerpo; } catch (__) {}
   }
 
@@ -66,8 +77,6 @@ self.addEventListener('push', e => {
 });
 
 // ── Marca en fired los eventos notificados por FCM ────────────────────────────
-// Evita que checkAndNotify repita la notificacion si el usuario abre la app
-// mas tarde en el mismo dia (el push ya llego a las 9 AM con app cerrada).
 async function markFcmFiredToday(cuerpo) {
   try {
     const events = await dbGet('events');
@@ -142,6 +151,7 @@ self.addEventListener('message', async e => {
   }
   if (e.data.type === 'PING') e.source && e.source.postMessage({ type: 'PONG', version: SW_VERSION });
   if (e.data.type === 'CHECK_NOW') await checkAndNotify();
+  if (e.data.type === 'SKIP_WAITING') self.skipWaiting();
 });
 
 // ── Background sync ───────────────────────────────────────────────────────────
@@ -169,8 +179,6 @@ self.addEventListener('notificationclick', e => {
 });
 
 // ── Notificacion local de respaldo (cuando el usuario abre la app) ────────────
-// Solo se dispara si el push FCM no llego (app sin conexion a las 9 AM, etc.)
-// El sistema fired[] impide duplicar si ya se notifico via FCM o localmente.
 async function checkAndNotify() {
   try {
     const events = await dbGet('events');
