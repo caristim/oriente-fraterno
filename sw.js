@@ -1,10 +1,10 @@
-// Oriente Fraterno 148 - Service Worker v10
-// Maneja notificaciones FCM en background y logica local de respaldo
+// Oriente Fraterno 148 - Service Worker v11
+// Maneja notificaciones FCM en background y lógica local de respaldo
 
 importScripts('https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js');
 importScripts('https://www.gstatic.com/firebasejs/10.8.0/firebase-messaging-compat.js');
 
-const SW_VERSION = 'of-sw-v10';
+const SW_VERSION = 'of-sw-v11';
 const DB_NAME    = 'of_sw';
 const DB_VERSION = 1;
 
@@ -17,57 +17,54 @@ firebase.initializeApp({
   appId:             '1:101867774014:web:0b4bb797293910c419716f',
 });
 
-// Inicializar el SDK de Firebase Messaging en el SW.
-// NO se registra onBackgroundMessage porque el handler nativo 'push'
-// ya cubre todos los casos y evita la doble ejecucion.
-firebase.messaging();
+const messaging = firebase.messaging();
 
-// ── Handler nativo 'push' (UNICO handler de notificaciones) ───────────────────
-// Se ejecuta aunque la app este completamente cerrada.
-// Al ser el UNICO handler, evita condiciones de carrera y notificaciones
-// duplicadas que ocurrian cuando coexistia con onBackgroundMessage.
-self.addEventListener('push', e => {
-  if (!e.data) return;
-
+// ── Handler de notificaciones en background (app cerrada o en segundo plano) ──
+//
+// CORRECCIÓN v11: se eliminó el addEventListener('push') manual que coexistía
+// con firebase.messaging(). El SDK de Firebase Messaging intercepta el evento
+// 'push' internamente; cuando ambos handlers estaban activos, el handler manual
+// no recibía el evento de forma consistente en Chrome/Android, y el comportamiento
+// en iOS (Safari PWA) era impredecible.
+//
+// onBackgroundMessage() es el único canal correcto para procesar mensajes FCM
+// con la app cerrada o en background cuando se usa el SDK compat en el SW.
+// Se ejecuta para payloads data-only (que es lo que envía el workflow).
+//
+messaging.onBackgroundMessage(payload => {
   let titulo = 'Oriente Fraterno 148';
-  let cuerpo = 'Hoy hay un evento';
+  let cuerpo  = 'Hoy hay un evento';
 
-  try {
-    const payload = e.data.json();
-    // Soporte para payload data-only (enviado desde GitHub Actions)
-    if (payload.data) {
-      titulo = payload.data.title  || titulo;
-      cuerpo = payload.data.body   || cuerpo;
-    }
-    // Soporte para payload con notification (fallback)
-    if (payload.notification) {
-      titulo = payload.notification.title || titulo;
-      cuerpo = payload.notification.body  || cuerpo;
-    }
-  } catch (_) {
-    // Si no es JSON valido intentar como texto plano
-    try { cuerpo = e.data.text() || cuerpo; } catch (__) {}
+  // El workflow envía payload data-only: { data: { title, body, click_action } }
+  if (payload.data) {
+    titulo = payload.data.title || titulo;
+    cuerpo  = payload.data.body  || cuerpo;
+  }
+  // Compatibilidad con payloads que traigan campo notification (no usados actualmente)
+  if (payload.notification) {
+    titulo = payload.notification.title || titulo;
+    cuerpo  = payload.notification.body  || cuerpo;
   }
 
-  console.log('[SW-push] Notificacion recibida:', titulo, cuerpo);
+  console.log('[SW-FCM] Mensaje background recibido:', titulo, cuerpo);
 
-  e.waitUntil(
-    self.registration.showNotification(titulo, {
-      body:               cuerpo,
-      icon:               './icon-192.png',
-      badge:              './icon-192.png',
-      requireInteraction: true,
-      vibrate:            [200, 100, 200, 100, 200],
-      tag:                'of-fcm',
-      data:               { url: 'https://caristim.github.io/oriente-fraterno/' },
-      actions:            [{ action: 'open', title: 'Ver app' }],
-    }).then(() => markFcmFiredToday(cuerpo))
-  );
+  // Mostrar la notificación y marcar en fired[] para que checkAndNotify
+  // no la repita si el usuario abre la app más tarde ese mismo día.
+  return self.registration.showNotification(titulo, {
+    body:               cuerpo,
+    icon:               './icon-192.png',
+    badge:              './icon-192.png',
+    requireInteraction: true,
+    vibrate:            [200, 100, 200, 100, 200],
+    tag:                'of-fcm',
+    data:               { url: 'https://caristim.github.io/oriente-fraterno/' },
+    actions:            [{ action: 'open', title: 'Ver app' }],
+  }).then(() => markFcmFiredToday(cuerpo));
 });
 
-// ── Marca en fired los eventos notificados por FCM ────────────────────────────
-// Evita que checkAndNotify repita la notificacion si el usuario abre la app
-// mas tarde en el mismo dia (el push ya llego a las 9 AM con app cerrada).
+// ── Marca en fired[] los eventos notificados por FCM ─────────────────────────
+// Evita que checkAndNotify repita la notificación si el usuario abre la app
+// más tarde en el mismo día (el push ya llegó a las 9 AM con app cerrada).
 async function markFcmFiredToday(cuerpo) {
   try {
     const events = await dbGet('events');
@@ -80,7 +77,7 @@ async function markFcmFiredToday(cuerpo) {
       if (!ev.fecha || !ev.nombre || !ev.tipo) continue;
       const parts = String(ev.fecha).split('-');
       let month, day;
-      if (parts.length === 2) [month, day] = parts.map(Number);
+      if (parts.length === 2)      [month, day] = parts.map(Number);
       else if (parts.length === 3) [, month, day] = parts.map(Number);
       else continue;
       if (!month || !day) continue;
@@ -89,10 +86,7 @@ async function markFcmFiredToday(cuerpo) {
       if (!isToday) continue;
       const evId    = ev.docId || ev.id || `${ev.nombre}-${ev.fecha}`;
       const fireKey = `${evId}-${now.getFullYear()}`;
-      if (!fired[fireKey]) {
-        fired[fireKey] = true;
-        changed = true;
-      }
+      if (!fired[fireKey]) { fired[fireKey] = true; changed = true; }
     }
     if (changed) await dbSet('fired', fired);
   } catch (err) { console.warn('[SW] markFcmFiredToday error:', err); }
@@ -130,8 +124,8 @@ async function dbSet(key, value) {
 }
 
 // ── Lifecycle ─────────────────────────────────────────────────────────────────
-self.addEventListener('install', () => { console.log('[SW]', SW_VERSION); self.skipWaiting(); });
-self.addEventListener('activate', e => { e.waitUntil(self.clients.claim().then(() => checkAndNotify())); });
+self.addEventListener('install',  ()  => { console.log('[SW]', SW_VERSION); self.skipWaiting(); });
+self.addEventListener('activate', e   => { e.waitUntil(self.clients.claim()); });
 
 // ── Mensajes desde la app ─────────────────────────────────────────────────────
 self.addEventListener('message', async e => {
@@ -140,21 +134,25 @@ self.addEventListener('message', async e => {
     await dbSet('events', e.data.events || []);
     await checkAndNotify();
   }
-  if (e.data.type === 'PING') e.source && e.source.postMessage({ type: 'PONG', version: SW_VERSION });
+  if (e.data.type === 'PING')      e.source && e.source.postMessage({ type: 'PONG', version: SW_VERSION });
   if (e.data.type === 'CHECK_NOW') await checkAndNotify();
+  if (e.data.type === 'SKIP_WAITING') self.skipWaiting();
 });
 
 // ── Background sync ───────────────────────────────────────────────────────────
 self.addEventListener('periodicsync', e => { if (e.tag === 'of-daily-check') e.waitUntil(checkAndNotify()); });
-self.addEventListener('sync', e => { if (e.tag === 'of-check') e.waitUntil(checkAndNotify()); });
+self.addEventListener('sync',         e => { if (e.tag === 'of-check')       e.waitUntil(checkAndNotify()); });
 
 // ── Fetch ─────────────────────────────────────────────────────────────────────
+// Solo maneja la respuesta de red. checkAndNotify() ya no se llama aquí porque:
+// - La notificación FCM (principal) llega vía onBackgroundMessage con app cerrada.
+// - checkAndNotify() como respaldo se ejecuta al recibir SCHEDULE_EVENTS o en sync.
+// Llamarlo en cada fetch era innecesario y abría IndexedDB en cada navegación.
 self.addEventListener('fetch', e => {
-  if (e.request.mode === 'navigate') checkAndNotify().catch(console.warn);
-  e.respondWith(fetch(e.request).catch(() => new Response('Sin conexion', { status: 503 })));
+  e.respondWith(fetch(e.request).catch(() => new Response('Sin conexión', { status: 503 })));
 });
 
-// ── Clic en notificacion ──────────────────────────────────────────────────────
+// ── Clic en notificación ──────────────────────────────────────────────────────
 self.addEventListener('notificationclick', e => {
   e.notification.close();
   const targetUrl = (e.notification.data && e.notification.data.url)
@@ -168,9 +166,9 @@ self.addEventListener('notificationclick', e => {
   );
 });
 
-// ── Notificacion local de respaldo (cuando el usuario abre la app) ────────────
-// Solo se dispara si el push FCM no llego (app sin conexion a las 9 AM, etc.)
-// El sistema fired[] impide duplicar si ya se notifico via FCM o localmente.
+// ── Notificación local de respaldo ────────────────────────────────────────────
+// Se dispara solo si el push FCM no llegó (sin internet a las 9 AM, etc.)
+// y el usuario abre la app más tarde ese día. El sistema fired[] evita duplicados.
 async function checkAndNotify() {
   try {
     const events = await dbGet('events');
@@ -183,7 +181,7 @@ async function checkAndNotify() {
       if (!ev.fecha || !ev.nombre || !ev.tipo) continue;
       const parts = String(ev.fecha).split('-');
       let month, day;
-      if (parts.length === 2) [month, day] = parts.map(Number);
+      if (parts.length === 2)      [month, day] = parts.map(Number);
       else if (parts.length === 3) [, month, day] = parts.map(Number);
       else continue;
       if (!month || !day) continue;
