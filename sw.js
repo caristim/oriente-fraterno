@@ -1,227 +1,210 @@
-// Oriente Fraterno 148 - Service Worker v11
-// Maneja notificaciones FCM en background + foreground cerrado
-// Compatible Android + iOS 16.4+ PWA
+// Oriente Fraterno 148 - Service Worker v10
+// Maneja notificaciones FCM en background y logica local de respaldo
 
 importScripts('https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js');
 importScripts('https://www.gstatic.com/firebasejs/10.8.0/firebase-messaging-compat.js');
 
-const SW_VERSION = 'of-sw-v11';
-const CACHE_NAME = 'of-cache-v1';
-const DB_NAME = 'of_sw';
+const SW_VERSION = 'of-sw-v10';
+const DB_NAME    = 'of_sw';
 const DB_VERSION = 1;
 
 firebase.initializeApp({
-  apiKey: 'AIzaSyD9gQW61AvKHhNai6gljNFE7q9rS7KKuN8',
-  authDomain: 'orientefraterno148-2a0c1.firebaseapp.com',
-  projectId: 'orientefraterno148-2a0c1',
-  storageBucket: 'orientefraterno148-2a0c1.firebasestorage.app',
+  apiKey:            'AIzaSyD9gQW61AvKHhNai6gljNFE7q9rS7KKuN8',
+  authDomain:        'orientefraterno148-2a0c1.firebaseapp.com',
+  projectId:         'orientefraterno148-2a0c1',
+  storageBucket:     'orientefraterno148-2a0c1.firebasestorage.app',
   messagingSenderId: '101867774014',
-  appId: '1:101867774014:web:0b4bb797293910c419716f',
+  appId:             '1:101867774014:web:0b4bb797293910c419716f',
 });
 
-// Inicializar Messaging. No usamos onBackgroundMessage porque el handler 'push'
-// nativo es más confiable y evita duplicados en Android + iOS
-const messaging = firebase.messaging();
+// Inicializar el SDK de Firebase Messaging en el SW.
+// NO se registra onBackgroundMessage porque el handler nativo 'push'
+// ya cubre todos los casos y evita la doble ejecucion.
+firebase.messaging();
 
-// ── INSTALACIÓN Y ACTIVACIÓN ────────────────────────────
-self.addEventListener('install', event => {
-  console.log(`[SW ${SW_VERSION}] Instalando...`);
-  self.skipWaiting(); // Tomar control inmediato
-});
-
-self.addEventListener('activate', event => {
-  console.log(`[SW ${SW_VERSION}] Activado`);
-  event.waitUntil(self.clients.claim()); // Controlar todas las pestañas
-});
-
-// ── HANDLER PUSH: UNICO PUNTO DE ENTRADA PARA NOTIFICACIONES ───────────────────
-// Se ejecuta aunque la app esté completamente cerrada en Android y iOS PWA
-self.addEventListener('push', event => {
-  if (!event.data) {
-    console.log('[SW-push] Push sin data');
-    return;
-  }
+// ── Handler nativo 'push' (UNICO handler de notificaciones) ───────────────────
+// Se ejecuta aunque la app este completamente cerrada.
+// Al ser el UNICO handler, evita condiciones de carrera y notificaciones
+// duplicadas que ocurrian cuando coexistia con onBackgroundMessage.
+self.addEventListener('push', e => {
+  if (!e.data) return;
 
   let titulo = 'Oriente Fraterno 148';
   let cuerpo = 'Hoy hay un evento';
-  let url = 'https://caristim.github.io/oriente-fraterno/';
 
   try {
-    const payload = event.data.json();
-    
-    // Formato 1: data-only message desde GitHub Actions
+    const payload = e.data.json();
+    // Soporte para payload data-only (enviado desde GitHub Actions)
     if (payload.data) {
-      titulo = payload.data.title || titulo;
-      cuerpo = payload.data.body || cuerpo;
-      url = payload.data.url || url;
+      titulo = payload.data.title  || titulo;
+      cuerpo = payload.data.body   || cuerpo;
     }
-    
-    // Formato 2: notification payload, fallback
+    // Soporte para payload con notification (fallback)
     if (payload.notification) {
       titulo = payload.notification.title || titulo;
-      cuerpo = payload.notification.body || cuerpo;
+      cuerpo = payload.notification.body  || cuerpo;
     }
-  } catch (e) {
-    // Si no es JSON, intentar como texto
-    try { 
-      cuerpo = event.data.text() || cuerpo; 
-    } catch (_) {}
+  } catch (_) {
+    // Si no es JSON valido intentar como texto plano
+    try { cuerpo = e.data.text() || cuerpo; } catch (__) {}
   }
 
-  console.log('[SW-push] Mostrando notificación:', titulo);
+  console.log('[SW-push] Notificacion recibida:', titulo, cuerpo);
 
-  const opciones = {
-    body: cuerpo,
-    icon: './icon-192.png',
-    badge: './icon-192.png',
-    image: './icon-512.png', // Imagen grande en Android
-    requireInteraction: true, // No se cierra sola en desktop
-    vibrate: [200, 100, 200, 100, 200],
-    tag: 'of-evento-diario', // Agrupa notificaciones del mismo día
-    renotify: true, // Si llega otra con mismo tag, vuelve a vibrar
-    timestamp: Date.now(),
-    data: { 
-      url: url,
-      dateOfArrival: Date.now(),
-      primaryKey: 1
-    },
-    actions: [
-      { action: 'open', title: 'Ver eventos', icon: './icon-192.png' },
-      { action: 'close', title: 'Cerrar', icon: './icon-192.png' }
-    ]
-  };
-
-  event.waitUntil(
-    self.registration.showNotification(titulo, opciones)
-     .then(() => markFcmFiredToday(cuerpo))
-     .catch(err => console.error('[SW-push] Error showNotification:', err))
+  e.waitUntil(
+    self.registration.showNotification(titulo, {
+      body:               cuerpo,
+      icon:               './icon-192.png',
+      badge:              './icon-192.png',
+      requireInteraction: true,
+      vibrate:            [200, 100, 200, 100, 200],
+      tag:                'of-fcm',
+      data:               { url: 'https://caristim.github.io/oriente-fraterno/' },
+      actions:            [{ action: 'open', title: 'Ver app' }],
+    }).then(() => markFcmFiredToday(cuerpo))
   );
 });
 
-// ── CLICK EN NOTIFICACIÓN ────────────────────────────────
-// Abre la app o enfoca la pestaña si ya está abierta
-self.addEventListener('notificationclick', event => {
-  console.log('[SW] Click en notificación:', event.action);
-  event.notification.close();
-
-  if (event.action === 'close') return;
-
-  const urlToOpen = event.notification.data?.url || 'https://caristim.github.io/oriente-fraterno/';
-
-  event.waitUntil(
-    clients.matchAll({ type: 'window', includeUncontrolled: true })
-     .then(clientList => {
-        // Si ya hay una ventana abierta, enfocarla
-        for (const client of clientList) {
-          if (client.url.includes('oriente-fraterno') && 'focus' in client) {
-            return client.focus();
-          }
-        }
-        // Si no hay ventana, abrir nueva
-        if (clients.openWindow) {
-          return clients.openWindow(urlToOpen);
-        }
-      })
-  );
-});
-
-// ── MARCA EVENTOS COMO NOTIFICADOS PARA EVITAR DUPLICADOS ──────────────────────
+// ── Marca en fired los eventos notificados por FCM ────────────────────────────
+// Evita que checkAndNotify repita la notificacion si el usuario abre la app
+// mas tarde en el mismo dia (el push ya llego a las 9 AM con app cerrada).
 async function markFcmFiredToday(cuerpo) {
   try {
     const events = await dbGet('events');
     if (!Array.isArray(events) || events.length === 0) return;
-    
-    const now = new Date();
+    const now   = new Date();
     const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
     const fired = (await dbGet('fired')) || {};
     let changed = false;
-    
     for (const ev of events) {
-      if (!ev.fecha ||!ev.nombre) continue;
-      
+      if (!ev.fecha || !ev.nombre || !ev.tipo) continue;
       const parts = String(ev.fecha).split('-');
       let month, day;
       if (parts.length === 2) [month, day] = parts.map(Number);
       else if (parts.length === 3) [, month, day] = parts.map(Number);
       else continue;
-      
-      if (!month ||!day) continue;
-      
-      const evDay = new Date(now.getFullYear(), month - 1, day);
+      if (!month || !day) continue;
+      const evDay   = new Date(now.getFullYear(), month - 1, day);
       const isToday = evDay.getTime() === today.getTime();
-      
       if (!isToday) continue;
-      
-      const evId = ev.docId || ev.id || `${ev.nombre}-${ev.fecha}`;
+      const evId    = ev.docId || ev.id || `${ev.nombre}-${ev.fecha}`;
       const fireKey = `${evId}-${now.getFullYear()}`;
-      
       if (!fired[fireKey]) {
         fired[fireKey] = true;
         changed = true;
       }
     }
-    
     if (changed) await dbSet('fired', fired);
-  } catch (err) { 
-    console.warn('[SW] markFcmFiredToday error:', err); 
-  }
+  } catch (err) { console.warn('[SW] markFcmFiredToday error:', err); }
 }
 
-// ── INDEXEDDB HELPERS ────────────────────────────────────
-function dbOpen() {
-  return new Promise((resolve, reject) => {
+// ── IndexedDB helpers ─────────────────────────────────────────────────────────
+function openDB() {
+  return new Promise((res, rej) => {
     const req = indexedDB.open(DB_NAME, DB_VERSION);
-    req.onupgradeneeded = () => {
-      req.result.createObjectStore('kv');
+    req.onupgradeneeded = e => {
+      const db = e.target.result;
+      if (!db.objectStoreNames.contains('kv')) db.createObjectStore('kv');
     };
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
+    req.onsuccess = e => res(e.target.result);
+    req.onerror   = e => rej(e.target.error);
   });
 }
-
 async function dbGet(key) {
-  const db = await dbOpen();
-  return new Promise((resolve, reject) => {
+  const db = await openDB();
+  return new Promise((res, rej) => {
     const tx = db.transaction('kv', 'readonly');
-    const req = tx.objectStore('kv').get(key);
-    req.onsuccess = () => resolve(req.result);
-    req.onerror = () => reject(req.error);
+    const r  = tx.objectStore('kv').get(key);
+    r.onsuccess = () => res(r.result);
+    r.onerror   = () => rej(r.error);
   });
 }
-
-async function dbSet(key, val) {
-  const db = await dbOpen();
-  return new Promise((resolve, reject) => {
+async function dbSet(key, value) {
+  const db = await openDB();
+  return new Promise((res, rej) => {
     const tx = db.transaction('kv', 'readwrite');
-    tx.objectStore('kv').put(val, key);
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
+    tx.objectStore('kv').put(value, key);
+    tx.oncomplete = res;
+    tx.onerror    = () => rej(tx.error);
   });
 }
 
-// ── CACHE BÁSICO PARA OFFLINE ────────────────────────────
-self.addEventListener('fetch', event => {
-  // Solo cachear GET y archivos estáticos
-  if (event.request.method!== 'GET') return;
-  
-  event.respondWith(
-    caches.match(event.request).then(cached => {
-      return cached || fetch(event.request).then(response => {
-        // No cachear firebase ni APIs externas
-        if (!event.request.url.includes('firebase') && 
-           !event.request.url.includes('googleapis')) {
-          return caches.open(CACHE_NAME).then(cache => {
-            cache.put(event.request, response.clone());
-            return response;
-          });
-        }
-        return response;
-      });
-    }).catch(() => {
-      // Fallback offline
-      if (event.request.destination === 'document') {
-        return caches.match('./index.html');
-      }
+// ── Lifecycle ─────────────────────────────────────────────────────────────────
+self.addEventListener('install', () => { console.log('[SW]', SW_VERSION); self.skipWaiting(); });
+self.addEventListener('activate', e => { e.waitUntil(self.clients.claim().then(() => checkAndNotify())); });
+
+// ── Mensajes desde la app ─────────────────────────────────────────────────────
+self.addEventListener('message', async e => {
+  if (!e.data) return;
+  if (e.data.type === 'SCHEDULE_EVENTS') {
+    await dbSet('events', e.data.events || []);
+    await checkAndNotify();
+  }
+  if (e.data.type === 'PING') e.source && e.source.postMessage({ type: 'PONG', version: SW_VERSION });
+  if (e.data.type === 'CHECK_NOW') await checkAndNotify();
+});
+
+// ── Background sync ───────────────────────────────────────────────────────────
+self.addEventListener('periodicsync', e => { if (e.tag === 'of-daily-check') e.waitUntil(checkAndNotify()); });
+self.addEventListener('sync', e => { if (e.tag === 'of-check') e.waitUntil(checkAndNotify()); });
+
+// ── Fetch ─────────────────────────────────────────────────────────────────────
+self.addEventListener('fetch', e => {
+  if (e.request.mode === 'navigate') checkAndNotify().catch(console.warn);
+  e.respondWith(fetch(e.request).catch(() => new Response('Sin conexion', { status: 503 })));
+});
+
+// ── Clic en notificacion ──────────────────────────────────────────────────────
+self.addEventListener('notificationclick', e => {
+  e.notification.close();
+  const targetUrl = (e.notification.data && e.notification.data.url)
+    || 'https://caristim.github.io/oriente-fraterno/';
+  e.waitUntil(
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(clients => {
+      const appClient = clients.find(c => c.url.includes('oriente-fraterno'));
+      if (appClient) return appClient.focus();
+      return self.clients.openWindow(targetUrl);
     })
   );
 });
+
+// ── Notificacion local de respaldo (cuando el usuario abre la app) ────────────
+// Solo se dispara si el push FCM no llego (app sin conexion a las 9 AM, etc.)
+// El sistema fired[] impide duplicar si ya se notifico via FCM o localmente.
+async function checkAndNotify() {
+  try {
+    const events = await dbGet('events');
+    if (!Array.isArray(events) || events.length === 0) return;
+    const now   = new Date();
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const fired = (await dbGet('fired')) || {};
+    let changed = false;
+    for (const ev of events) {
+      if (!ev.fecha || !ev.nombre || !ev.tipo) continue;
+      const parts = String(ev.fecha).split('-');
+      let month, day;
+      if (parts.length === 2) [month, day] = parts.map(Number);
+      else if (parts.length === 3) [, month, day] = parts.map(Number);
+      else continue;
+      if (!month || !day) continue;
+      const evDay   = new Date(now.getFullYear(), month - 1, day);
+      const isToday = evDay.getTime() === today.getTime();
+      if (!isToday) continue;
+      const evId    = ev.docId || ev.id || `${ev.nombre}-${ev.fecha}`;
+      const fireKey = `${evId}-${now.getFullYear()}`;
+      if (fired[fireKey]) continue;
+      if (self.Notification && Notification.permission !== 'granted') continue;
+      await self.registration.showNotification('Oriente Fraterno 148', {
+        body:               `Hoy: ${ev.tipo} de ${ev.nombre}`,
+        tag:                `of-local-${evId}`,
+        icon:               './icon-192.png',
+        badge:              './icon-192.png',
+        requireInteraction: true,
+        vibrate:            [200, 100, 200, 100, 200],
+      });
+      fired[fireKey] = true;
+      changed = true;
+    }
+    if (changed) await dbSet('fired', fired);
+  } catch (err) { console.warn('[SW] checkAndNotify error:', err); }
+}
