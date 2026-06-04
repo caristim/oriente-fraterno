@@ -1,10 +1,10 @@
-// Oriente Fraterno 148 - Service Worker v11
+// Oriente Fraterno 148 - Service Worker v12
 // Maneja notificaciones FCM en background y lógica local de respaldo
 
 importScripts('https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js');
 importScripts('https://www.gstatic.com/firebasejs/10.8.0/firebase-messaging-compat.js');
 
-const SW_VERSION = 'of-sw-v11';
+const SW_VERSION = 'of-sw-v12';
 const DB_NAME    = 'of_sw';
 const DB_VERSION = 1;
 
@@ -19,53 +19,39 @@ firebase.initializeApp({
 
 const messaging = firebase.messaging();
 
-// ── Handler de notificaciones en background (app cerrada o en segundo plano) ──
+// ── Handler de notificaciones en background ───────────────────────────────────
 //
-// CORRECCIÓN v11: se eliminó el addEventListener('push') manual que coexistía
-// con firebase.messaging(). El SDK de Firebase Messaging intercepta el evento
-// 'push' internamente; cuando ambos handlers estaban activos, el handler manual
-// no recibía el evento de forma consistente en Chrome/Android, y el comportamiento
-// en iOS (Safari PWA) era impredecible.
+// El workflow ahora envía webpush.notification en el payload (además de data).
+// Esto significa:
+//   - iOS PWA: FCM/WebKit muestra la notificación AUTOMÁTICAMENTE sin pasar por este
+//     handler, garantizando que llegue aunque el SDK compat no sea 100% compatible
+//     con Safari WebKit.
+//   - Android/Chrome: Firebase SDK detecta el campo notification, muestra la notif
+//     automáticamente Y llama a onBackgroundMessage.
 //
-// onBackgroundMessage() es el único canal correcto para procesar mensajes FCM
-// con la app cerrada o en background cuando se usa el SDK compat en el SW.
-// Se ejecuta para payloads data-only (que es lo que envía el workflow).
+// Por eso este handler NO llama a showNotification() — ya fue mostrada.
+// Solo ejecuta markFcmFiredToday() para que checkAndNotify() no duplique
+// la notificación si el usuario abre la app más tarde ese mismo día.
 //
 messaging.onBackgroundMessage(payload => {
-  let titulo = 'Oriente Fraterno 148';
-  let cuerpo  = 'Hoy hay un evento';
-
-  // El workflow envía payload data-only: { data: { title, body, click_action } }
-  if (payload.data) {
-    titulo = payload.data.title || titulo;
-    cuerpo  = payload.data.body  || cuerpo;
-  }
-  // Compatibilidad con payloads que traigan campo notification (no usados actualmente)
-  if (payload.notification) {
-    titulo = payload.notification.title || titulo;
-    cuerpo  = payload.notification.body  || cuerpo;
-  }
+  const titulo = (payload.data && payload.data.title)
+              || (payload.notification && payload.notification.title)
+              || 'Oriente Fraterno 148';
+  const cuerpo  = (payload.data && payload.data.body)
+              || (payload.notification && payload.notification.body)
+              || 'Hoy hay un evento';
 
   console.log('[SW-FCM] Mensaje background recibido:', titulo, cuerpo);
 
-  // Mostrar la notificación y marcar en fired[] para que checkAndNotify
-  // no la repita si el usuario abre la app más tarde ese mismo día.
-  return self.registration.showNotification(titulo, {
-    body:               cuerpo,
-    icon:               './icon-192.png',
-    badge:              './icon-192.png',
-    requireInteraction: true,
-    vibrate:            [200, 100, 200, 100, 200],
-    tag:                'of-fcm',
-    data:               { url: 'https://caristim.github.io/oriente-fraterno/' },
-    actions:            [{ action: 'open', title: 'Ver app' }],
-  }).then(() => markFcmFiredToday(cuerpo));
+  // La notificación ya fue mostrada automáticamente por FCM (webpush.notification).
+  // Solo marcar en fired[] para evitar duplicado desde checkAndNotify().
+  return markFcmFiredToday();
 });
 
-// ── Marca en fired[] los eventos notificados por FCM ─────────────────────────
+// ── Marca en fired[] los eventos de hoy notificados por FCM ──────────────────
 // Evita que checkAndNotify repita la notificación si el usuario abre la app
-// más tarde en el mismo día (el push ya llegó a las 9 AM con app cerrada).
-async function markFcmFiredToday(cuerpo) {
+// más tarde en el mismo día.
+async function markFcmFiredToday() {
   try {
     const events = await dbGet('events');
     if (!Array.isArray(events) || events.length === 0) return;
@@ -134,8 +120,8 @@ self.addEventListener('message', async e => {
     await dbSet('events', e.data.events || []);
     await checkAndNotify();
   }
-  if (e.data.type === 'PING')      e.source && e.source.postMessage({ type: 'PONG', version: SW_VERSION });
-  if (e.data.type === 'CHECK_NOW') await checkAndNotify();
+  if (e.data.type === 'PING')         e.source && e.source.postMessage({ type: 'PONG', version: SW_VERSION });
+  if (e.data.type === 'CHECK_NOW')    await checkAndNotify();
   if (e.data.type === 'SKIP_WAITING') self.skipWaiting();
 });
 
@@ -144,10 +130,6 @@ self.addEventListener('periodicsync', e => { if (e.tag === 'of-daily-check') e.w
 self.addEventListener('sync',         e => { if (e.tag === 'of-check')       e.waitUntil(checkAndNotify()); });
 
 // ── Fetch ─────────────────────────────────────────────────────────────────────
-// Solo maneja la respuesta de red. checkAndNotify() ya no se llama aquí porque:
-// - La notificación FCM (principal) llega vía onBackgroundMessage con app cerrada.
-// - checkAndNotify() como respaldo se ejecuta al recibir SCHEDULE_EVENTS o en sync.
-// Llamarlo en cada fetch era innecesario y abría IndexedDB en cada navegación.
 self.addEventListener('fetch', e => {
   e.respondWith(fetch(e.request).catch(() => new Response('Sin conexión', { status: 503 })));
 });
@@ -167,7 +149,7 @@ self.addEventListener('notificationclick', e => {
 });
 
 // ── Notificación local de respaldo ────────────────────────────────────────────
-// Se dispara solo si el push FCM no llegó (sin internet a las 9 AM, etc.)
+// Solo se dispara si el push FCM no llegó (usuario sin internet a las 9 AM, etc.)
 // y el usuario abre la app más tarde ese día. El sistema fired[] evita duplicados.
 async function checkAndNotify() {
   try {
