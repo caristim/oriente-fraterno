@@ -1,0 +1,273 @@
+// Oriente Fraterno 148 - Service Worker v12
+// Push notifications con app cerrada - Android + iOS PWA 16.4+
+// NO MODIFICAR: Este archivo maneja solo notificaciones y cache básico
+
+importScripts('https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js');
+importScripts('https://www.gstatic.com/firebasejs/10.8.0/firebase-messaging-compat.js');
+
+const SW_VERSION = 'of-sw-v12';
+const CACHE_NAME = 'of-cache-v12';
+const DB_NAME = 'of_sw';
+const DB_VERSION = 1;
+const APP_URL = 'https://caristim.github.io/oriente-fraterno/';
+
+firebase.initializeApp({
+  apiKey: 'AIzaSyD9gQW61AvKHhNai6gljNFE7q9rS7KKuN8',
+  authDomain: 'orientefraterno148-2a0c1.firebaseapp.com',
+  projectId: 'orientefraterno148-2a0c1',
+  storageBucket: 'orientefraterno148-2a0c1.firebasestorage.app',
+  messagingSenderId: '101867774014',
+  appId: '1:101867774014:web:0b4bb797293910c419716f',
+});
+
+const messaging = firebase.messaging();
+
+// ── CICLO DE VIDA: Instalación y activación inmediata ─────────────────────────
+self.addEventListener('install', event => {
+  console.log(`[SW ${SW_VERSION}] Instalando...`);
+  self.skipWaiting(); // Activa sin esperar a que se cierren pestañas
+});
+
+self.addEventListener('activate', event => {
+  console.log(`[SW ${SW_VERSION}] Activado`);
+  event.waitUntil(
+    Promise.all([
+      self.clients.claim(), // Controla todas las pestañas abiertas ya
+      caches.keys().then(keys => {
+        // Limpiar caches viejos
+        return Promise.all(
+          keys.filter(key => key!== CACHE_NAME).map(key => caches.delete(key))
+        );
+      })
+    ])
+  );
+});
+
+// ── PUSH: Handler único para notificaciones en background/closed ─────────────
+// Funciona en Android Chrome y iOS Safari PWA instalada
+self.addEventListener('push', event => {
+  if (!event.data) {
+    console.log('[SW-push] Push recibido sin data');
+    return;
+  }
+
+  let titulo = 'Oriente Fraterno 148';
+  let cuerpo = 'Hoy hay un evento';
+  let url = APP_URL;
+  let icon = './icon-192.png';
+  let badge = './icon-192.png';
+  let image = './icon-512.png';
+
+  try {
+    const payload = event.data.json();
+    
+    // Formato 1: data-only desde GitHub Actions - recomendado
+    if (payload.data) {
+      titulo = payload.data.title || titulo;
+      cuerpo = payload.data.body || cuerpo;
+      url = payload.data.url || url;
+      icon = payload.data.icon || icon;
+      badge = payload.data.badge || badge;
+      image = payload.data.image || image;
+    }
+    
+    // Formato 2: notification payload - fallback
+    if (payload.notification) {
+      titulo = payload.notification.title || titulo;
+      cuerpo = payload.notification.body || cuerpo;
+      icon = payload.notification.icon || icon;
+      image = payload.notification.image || image;
+    }
+  } catch (e) {
+    // Si no es JSON válido, usar como texto plano
+    try { 
+      cuerpo = event.data.text() || cuerpo; 
+    } catch (_) {}
+  }
+
+  console.log('[SW-push] Notificación:', titulo, '|', cuerpo);
+
+  const opciones = {
+    body: cuerpo,
+    icon: icon,
+    badge: badge,
+    image: image, // Se muestra en Android al expandir
+    requireInteraction: true, // Desktop: no se cierra sola
+    silent: false,
+    vibrate: [200, 100, 200, 100, 200],
+    tag: 'of-evento-' + new Date().toISOString().slice(0,10), // 1 notif por día
+    renotify: true, // Si llega otra hoy, vuelve a alertar
+    timestamp: Date.now(),
+    data: { 
+      url: url,
+      dateOfArrival: Date.now(),
+      click_action: url
+    },
+    actions: [
+      { action: 'open_app', title: 'Ver eventos', icon: './icon-192.png' },
+      { action: 'dismiss', title: 'Cerrar' }
+    ]
+  };
+
+  event.waitUntil(
+    self.registration.showNotification(titulo, opciones)
+    .then(() => markFcmFiredToday(cuerpo))
+    .catch(err => console.error('[SW-push] Error showNotification:', err))
+  );
+});
+
+// ── CLICK: Abrir app o enfocar pestaña existente ─────────────────────────────
+self.addEventListener('notificationclick', event => {
+  console.log('[SW] Click:', event.action);
+  event.notification.close();
+
+  if (event.action === 'dismiss') return;
+
+  const urlToOpen = event.notification.data?.url || event.notification.data?.click_action || APP_URL;
+
+  event.waitUntil(
+    clients.matchAll({ 
+      type: 'window', 
+      includeUncontrolled: true 
+    }).then(clientList => {
+      // Buscar si ya hay una ventana con la app
+      for (const client of clientList) {
+        if (client.url.includes('oriente-fraterno') && 'focus' in client) {
+          return client.focus();
+        }
+      }
+      // Abrir nueva ventana si no existe
+      if (clients.openWindow) {
+        return clients.openWindow(urlToOpen);
+      }
+    })
+  );
+});
+
+// ── CERRAR: Tracking opcional cuando usuario descarta ────────────────────────
+self.addEventListener('notificationclose', event => {
+  console.log('[SW] Notificación cerrada sin click');
+});
+
+// ── MARCA EVENTOS COMO NOTIFICADOS PARA EVITAR DUPLICADOS ────────────────────
+// Tu lógica original intacta. Evita re-notificar si abren la app después
+async function markFcmFiredToday(cuerpo) {
+  try {
+    const events = await dbGet('events');
+    if (!Array.isArray(events) || events.length === 0) return;
+    
+    const now = new Date();
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const fired = (await dbGet('fired')) || {};
+    let changed = false;
+    
+    for (const ev of events) {
+      if (!ev.fecha ||!ev.nombre) continue;
+      
+      const parts = String(ev.fecha).split('-');
+      let month, day;
+      if (parts.length === 2) [month, day] = parts.map(Number);
+      else if (parts.length === 3) [, month, day] = parts.map(Number);
+      else continue;
+      
+      if (!month ||!day) continue;
+      
+      const evDay = new Date(now.getFullYear(), month - 1, day);
+      const isToday = evDay.getTime() === today.getTime();
+      
+      if (!isToday) continue;
+      
+      const evId = ev.docId || ev.id || `${ev.nombre}-${ev.fecha}`;
+      const fireKey = `${evId}-${now.getFullYear()}`;
+      
+      if (!fired[fireKey]) {
+        fired[fireKey] = true;
+        changed = true;
+      }
+    }
+    
+    if (changed) await dbSet('fired', fired);
+  } catch (err) { 
+    console.warn('[SW] markFcmFiredToday error:', err); 
+  }
+}
+
+// ── INDEXEDDB HELPERS - Tu código original intacto ───────────────────────────
+function dbOpen() {
+  return new Promise((resolve, reject) => {
+    const req = indexedDB.open(DB_NAME, DB_VERSION);
+    req.onupgradeneeded = () => {
+      if (!req.result.objectStoreNames.contains('kv')) {
+        req.result.createObjectStore('kv');
+      }
+    };
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+async function dbGet(key) {
+  const db = await dbOpen();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction('kv', 'readonly');
+    const req = tx.objectStore('kv').get(key);
+    req.onsuccess = () => resolve(req.result);
+    req.onerror = () => reject(req.error);
+  });
+}
+
+async function dbSet(key, val) {
+  const db = await dbOpen();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction('kv', 'readwrite');
+    tx.objectStore('kv').put(val, key);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+  });
+}
+
+// ── CACHE: Estrategia cache-first para assets estáticos ──────────────────────
+self.addEventListener('fetch', event => {
+  // Solo GET. No cachear Firebase/Firestore
+  if (event.request.method!== 'GET' || 
+      event.request.url.includes('firebase') ||
+      event.request.url.includes('googleapis') ||
+      event.request.url.includes('firestore')) {
+    return;
+  }
+  
+  event.respondWith(
+    caches.match(event.request).then(cached => {
+      if (cached) return cached;
+      
+      return fetch(event.request).then(response => {
+        // Solo cachear respuestas exitosas
+        if (!response || response.status!== 200 || response.type!== 'basic') {
+          return response;
+        }
+        
+        const responseToCache = response.clone();
+        caches.open(CACHE_NAME).then(cache => {
+          cache.put(event.request, responseToCache);
+        });
+        
+        return response;
+      });
+    }).catch(() => {
+      // Offline fallback solo para documentos
+      if (event.request.destination === 'document') {
+        return caches.match('./index.html');
+      }
+    })
+  );
+});
+
+// ── MESSAGE: Comunicación con la app para debug ──────────────────────────────
+self.addEventListener('message', event => {
+  if (event.data && event.data.type === 'SKIP_WAITING') {
+    self.skipWaiting();
+  }
+  if (event.data && event.data.type === 'GET_VERSION') {
+    event.ports[0].postMessage({ version: SW_VERSION });
+  }
+});
