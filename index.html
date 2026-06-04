@@ -1,0 +1,198 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Registro Eventos · Oriente Fraterno</title>
+  <meta name="theme-color" content="#0f172a" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="Oriente Fraterno" />
+
+  <!-- PWA Manifest -->
+  <link rel="manifest" href="./manifest.json" />
+  <link rel="apple-touch-icon" href="./icon-192.png" />
+
+  <!-- Tailwind CSS CDN -->
+  <script>window.tailwindConfig=undefined;</script>
+  <script src="https://cdn.tailwindcss.com?plugins="></script>
+  <script>
+    (function () {
+      const _warn = console.warn.bind(console);
+      console.warn = function (...args) {
+        if (typeof args[0] === 'string' && args[0].includes('cdn.tailwindcss.com')) return;
+        _warn(...args);
+      };
+    })();
+  </script>
+
+  <!-- React + ReactDOM CDN -->
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+
+  <!-- Babel (JSX transpiler) -->
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <!-- Lucide Icons CDN -->
+  <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+
+  <!-- Firebase SDK -->
+  <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-messaging-compat.js"></script>
+  <script>
+    const firebaseConfig = {
+      apiKey: "AIzaSyD9gQW61AvKHhNai6gljNFE7q9rS7KKuN8",
+      authDomain: "orientefraterno148-2a0c1.firebaseapp.com",
+      projectId: "orientefraterno148-2a0c1",
+      storageBucket: "orientefraterno148-2a0c1.firebasestorage.app",
+      messagingSenderId: "101867774014",
+      appId: "1:101867774014:web:0b4bb797293910c419716f"
+    };
+    firebase.initializeApp(firebaseConfig);
+    const db = firebase.firestore();
+    const messaging = firebase.messaging();
+  </script>
+
+  <!-- Google Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Crimson+Pro:ital,wght@0,300;0,400;1,300&display=swap" rel="stylesheet" />
+
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          colors: {
+            navy: { DEFAULT: '#0f172a', mid: '#1e2d4a', light: '#243660' },
+            gold: { DEFAULT: '#c9a84c', light: '#e8c96a', pale: '#f5e8b8', dim: '#7a6128' },
+          },
+          fontFamily: {
+            cinzel: ['Cinzel', 'serif'],
+            crimson: ['"Crimson Pro"', 'Georgia', 'serif'],
+          },
+        }
+      }
+    }
+  </script>
+
+  <style>
+    body { font-family: 'Crimson Pro', Georgia, serif; }
+    input[type="date"]::-webkit-calendar-picker-indicator { filter: invert(0.7) sepia(1) saturate(2) hue-rotate(5deg); cursor: pointer; }
+    select option { background: #1e2d4a; color: #f8f4ec; }
+   .gold-border { border-color: rgba(201,168,76,0.35); }
+   .gold-glow:focus { box-shadow: 0 0 0 3px rgba(201,168,76,0.2); }
+    @keyframes fadeSlideIn {
+      from { opacity:0; transform:translateY(8px); }
+      to { opacity:1; transform:translateY(0); }
+    }
+   .fade-in { animation: fadeSlideIn 0.3s ease forwards; }
+    @keyframes toastIn { from { opacity:0; transform:translateX(-50%) translateY(20px); } to { opacity:1; transform:translateX(-50%) translateY(0); } }
+    @keyframes toastOut { from { opacity:1; } to { opacity:0; } }
+   .toast-in { animation: toastIn 0.3s ease forwards; }
+   .toast-out { animation: toastOut 0.3s ease forwards; }
+   .bg-grid {
+      background-image:
+        radial-gradient(ellipse 80% 40% at 50% 0%, rgba(201,168,76,0.07) 0%, transparent 70%),
+        repeating-linear-gradient(0deg, transparent, transparent 59px, rgba(201,168,76,0.04) 60px),
+        repeating-linear-gradient(90deg, transparent, transparent 59px, rgba(201,168,76,0.04) 60px);
+    }
+  </style>
+
+  <!-- === INICIO: AGREGADO PARA NOTIFICACIONES PUSH === -->
+  <script>
+    // 1. Registrar Service Worker
+    if ('serviceWorker' in navigator) {
+      window.addEventListener('load', () => {
+        navigator.serviceWorker.register('./sw.js')
+         .then(reg => {
+            console.log('[SW] Registrado:', reg.scope);
+            // 2. Inicializar FCM después de registrar SW
+            inicializarNotificacionesPush(reg);
+          })
+         .catch(err => console.error('[SW] Error al registrar:', err));
+      });
+    }
+
+    // 3. Pedir permiso y guardar token FCM
+    function inicializarNotificacionesPush(swReg) {
+      const VAPID_KEY = 'BM1SqlyjKhW45Y2JSBqDTYRT5QBV0yduJBtonc_QrlqM1DgaDmanz_w1R0Qj40ZuiG-rz4s4stIqBuYmciutG9Y'; //
+      
+      // Verificar si ya se pidió permiso antes
+      if (Notification.permission === 'granted') {
+        obtenerYGuardarToken(VAPID_KEY, swReg);
+      } else if (Notification.permission!== 'denied') {
+        // Pedir permiso con un delay para no ser invasivo al cargar
+        setTimeout(() => {
+          Notification.requestPermission().then(permission => {
+            if (permission === 'granted') {
+              console.log('[FCM] Permiso concedido');
+              obtenerYGuardarToken(VAPID_KEY, swReg);
+            } else {
+              console.log('[FCM] Permiso denegado');
+            }
+          });
+        }, 3000);
+      }
+    }
+
+    function obtenerYGuardarToken(vapidKey, swReg) {
+      messaging.getToken({ 
+        vapidKey: vapidKey,
+        serviceWorkerRegistration: swReg 
+      }).then(token => {
+        if (token) {
+          console.log('[FCM] Token obtenido');
+          guardarTokenEnFirestore(token);
+        } else {
+          console.log('[FCM] No se pudo obtener token');
+        }
+      }).catch(err => {
+        console.error('[FCM] Error obteniendo token:', err);
+      });
+
+      // Escuchar renovación de token
+      messaging.onTokenRefresh(() => {
+        messaging.getToken({ vapidKey, serviceWorkerRegistration: swReg })
+         .then(token => guardarTokenEnFirestore(token))
+         .catch(err => console.error('[FCM] Error renovando token:', err));
+      });
+    }
+
+    function guardarTokenEnFirestore(token) {
+      // Evitar duplicados: usar el token como ID del documento
+      const tokenRef = db.collection('fcm_tokens').doc(token);
+      tokenRef.set({
+        token: token,
+        platform: /iPhone|iPad|iPod/.test(navigator.userAgent)? 'ios' : 'android',
+        createdAt: firebase.firestore.FieldValue.serverTimestamp(),
+        lastActive: firebase.firestore.FieldValue.serverTimestamp(),
+        userAgent: navigator.userAgent
+      }, { merge: true })
+     .then(() => console.log('[FCM] Token guardado en Firestore'))
+     .catch(err => console.error('[FCM] Error guardando token:', err));
+    }
+
+    // 4. Manejar notificaciones en foreground
+    messaging.onMessage(payload => {
+      console.log('[FCM] Mensaje en foreground:', payload);
+      const titulo = payload.data?.title || payload.notification?.title || 'Oriente Fraterno 148';
+      const cuerpo = payload.data?.body || payload.notification?.body || 'Tenés un evento hoy';
+      
+      // Mostrar notificación manual si la app está abierta
+      if (Notification.permission === 'granted') {
+        new Notification(titulo, {
+          body: cuerpo,
+          icon: './icon-192.png',
+          badge: './icon-192.png'
+        });
+      }
+    });
+  </script>
+  <!-- === FIN: AGREGADO PARA NOTIFICACIONES PUSH === -->
+
+</head>
+<body>
+  <div id="root"></div>
+  <!-- Acá sigue toda tu lógica de React/Babel existente. No se tocó nada. -->
+</body>
+</html>
