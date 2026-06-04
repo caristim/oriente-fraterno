@@ -8,11 +8,52 @@
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-title" content="Oriente Fraterno" />
 
-  <!-- PWA Manifest -->
+  <!-- PWA Manifest estático (no blob) -->
   <link rel="manifest" href="./manifest.json" />
 
   <!-- Tailwind CSS CDN -->
-  <script src="https://cdn.tailwindcss.com"></script>
+  <script>window.tailwindConfig=undefined;</script>
+  <script src="https://cdn.tailwindcss.com?plugins="></script>
+  <script>
+    (function () {
+      const _warn = console.warn.bind(console);
+      console.warn = function (...args) {
+        if (typeof args[0] === 'string' && args[0].includes('cdn.tailwindcss.com')) return;
+        _warn(...args);
+      };
+    })();
+  </script>
+
+  <!-- React + ReactDOM CDN -->
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+
+  <!-- Babel (JSX transpiler) -->
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <!-- Lucide Icons CDN -->
+  <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+
+  <!-- Firebase SDK -->
+  <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore-compat.js"></script>
+  <script>
+    const firebaseConfig = {
+      apiKey: "AIzaSyD9gQW61AvKHhNai6gljNFE7q9rS7KKuN8",
+      authDomain: "orientefraterno148-2a0c1.firebaseapp.com",
+      projectId: "orientefraterno148-2a0c1",
+      storageBucket: "orientefraterno148-2a0c1.firebasestorage.app",
+      messagingSenderId: "101867774014",
+      appId: "1:101867774014:web:0b4bb797293910c419716f"
+    };
+    firebase.initializeApp(firebaseConfig);
+    const db = firebase.firestore();
+  </script>
+
+  <!-- Google Fonts -->
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Crimson+Pro:ital,wght@0,300;0,400;1,300&display=swap" rel="stylesheet" />
+
   <script>
     tailwind.config = {
       theme: {
@@ -30,53 +71,16 @@
     }
   </script>
 
-  <!-- React + ReactDOM CDN -->
-  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-
-  <!-- Babel (JSX transpiler) -->
-  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
-
-  <!-- Lucide Icons CDN -->
-  <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
-
-  <!-- Firebase SDK -->
-  <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
-  <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore-compat.js"></script>
-  <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-messaging-compat.js"></script>
-  
-  <script>
-    const firebaseConfig = {
-      apiKey: "AIzaSyD9gQW61AvKHhNai6gljNFE7q9rS7KKuN8",
-      authDomain: "orientefraterno148-2a0c1.firebaseapp.com",
-      projectId: "orientefraterno148-2a0c1",
-      storageBucket: "orientefraterno148-2a0c1.firebasestorage.app",
-      messagingSenderId: "101867774014",
-      appId: "1:101867774014:web:0b4bb797293910c419716f"
-    };
-    
-    let db = null;
-    try {
-      if (typeof firebase !== 'undefined') {
-        firebase.initializeApp(firebaseConfig);
-        db = firebase.firestore();
-      }
-    } catch (e) {
-      console.error("Error al inicializar Firebase:", e);
-    }
-  </script>
-
-  <!-- Google Fonts -->
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Crimson+Pro:ital,wght@0,300;0,400;1,300&display=swap" rel="stylesheet" />
-
   <style>
     body { font-family: 'Crimson Pro', Georgia, serif; }
     input[type="date"]::-webkit-calendar-picker-indicator { filter: invert(0.7) sepia(1) saturate(2) hue-rotate(5deg); cursor: pointer; }
     select option { background: #1e2d4a; color: #f8f4ec; }
     .gold-border { border-color: rgba(201,168,76,0.35); }
     .gold-glow:focus { box-shadow: 0 0 0 3px rgba(201,168,76,0.2); }
-    @keyframes fadeSlideIn { from { opacity:0; transform:translateY(8px); } to { opacity:1; transform:translateY(0); } }
+    @keyframes fadeSlideIn {
+      from { opacity:0; transform:translateY(8px); }
+      to   { opacity:1; transform:translateY(0); }
+    }
     .fade-in { animation: fadeSlideIn 0.3s ease forwards; }
     @keyframes toastIn  { from { opacity:0; transform:translateX(-50%) translateY(20px); } to { opacity:1; transform:translateX(-50%) translateY(0); } }
     @keyframes toastOut { from { opacity:1; } to { opacity:0; } }
@@ -93,49 +97,55 @@
     ::-webkit-scrollbar-thumb { background:#7a6128; border-radius:3px; }
   </style>
 
-  <script>
-    async function registrarTokenFCM() {
-      try {
-        if (!('serviceWorker' in navigator) || !('Notification' in window) || !db) return;
-        const messaging = firebase.messaging();
-        const token = await messaging.getToken({
-          vapidKey: 'BM1SqlyjKhW45Y2JSBqDTYRT5QBV0yduJBtonc_QrlqM1DgaDmanz_w1R0Qj40ZuiG-rz4s4stIqBuYmciutG9Y',
-          serviceWorkerRegistration: await navigator.serviceWorker.ready
-        });
-        if (token) {
-          const prevToken = localStorage.getItem('fcm_token');
-          if (prevToken && prevToken !== token) {
-            try { await db.collection('fcm_tokens').doc(prevToken).delete(); } catch(_) {}
-          }
-          await db.collection('fcm_tokens').doc(token).set({
-            token: token,
-            updatedAt: new Date().toISOString()
-          });
-          localStorage.setItem('fcm_token', token);
-        }
-      } catch(err) {
-        console.warn('[FCM] Error:', err.message);
+<script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-messaging-compat.js"></script>
+<script>
+// Registrar token FCM para recibir notificaciones push a las 9 AM
+async function registrarTokenFCM() {
+  try {
+    if (!('serviceWorker' in navigator) || !('Notification' in window)) return;
+    const messaging = firebase.messaging();
+    const token = await messaging.getToken({
+      vapidKey: 'BM1SqlyjKhW45Y2JSBqDTYRT5QBV0yduJBtonc_QrlqM1DgaDmanz_w1R0Qj40ZuiG-rz4s4stIqBuYmciutG9Y',
+      serviceWorkerRegistration: await navigator.serviceWorker.ready
+    });
+    if (token) {
+      // Si el token cambió (rotación por actualización del navegador), eliminar el anterior
+      const prevToken = localStorage.getItem('fcm_token');
+      if (prevToken && prevToken !== token) {
+        try {
+          await db.collection('fcm_tokens').doc(prevToken).delete();
+          console.log('[FCM] Token anterior eliminado de Firestore');
+        } catch(_) {}
       }
+      // Guardar/actualizar el token actual en Firestore
+      await db.collection('fcm_tokens').doc(token).set({
+        token: token,
+        updatedAt: new Date().toISOString()
+      });
+      // Recordar el token actual para detectar futuros cambios
+      localStorage.setItem('fcm_token', token);
+      console.log('[FCM] Token registrado OK');
     }
-    window._registrarTokenFCM = registrarTokenFCM;
-    async function scheduleNotification(ev) {}
-  </script>
-</head>
+  } catch(err) {
+    console.warn('[FCM] Error al registrar token:', err.message);
+  }
+}
 
+// Llamar cuando el usuario activa notificaciones
+window._registrarTokenFCM = registrarTokenFCM;
+
+// Funcion vacia para compatibilidad con el resto del codigo
+async function scheduleNotification(ev) {}
+</script>
+
+</head>
 <body class="bg-navy text-white bg-grid min-h-screen">
-  <div id="root">
-    <!-- Mensaje de carga inicial por si JS tarda o falla -->
-    <div class="min-h-screen flex items-center justify-center">
-      <div class="text-center">
-        <div class="text-gold text-4xl mb-4">✦</div>
-        <p class="font-cinzel text-gold/70 text-sm tracking-widest uppercase">Iniciando aplicación...</p>
-      </div>
-    </div>
-  </div>
+  <div id="root"></div>
 
   <script type="text/babel">
-    const { useState, useEffect, useCallback, useRef, useMemo } = React;
+    const { useState, useEffect, useCallback, useRef } = React;
 
+    // ── Constants ──────────────────────────────────────────────────
     const STORAGE_KEY = 'orienteFraterno_v2';
 
     const TIPOS = [
@@ -152,30 +162,16 @@
       'Pasaje al Oriente Eterno': 'bg-slate-800/50  border-slate-500/30',
     };
 
-    // Helpers robustos
-    function loadEvents() {
-      try {
-        const data = localStorage.getItem(STORAGE_KEY);
-        if (!data) return [];
-        const parsed = JSON.parse(data);
-        return Array.isArray(parsed) ? parsed : [];
-      } catch (e) {
-        console.error("Error cargando localStorage:", e);
-        return [];
-      }
-    }
+    // ── Helpers ────────────────────────────────────────────────────
+    function loadEvents()  { try { return JSON.parse(localStorage.getItem(STORAGE_KEY)) || []; } catch { return []; } }
+    function saveEvents(l) { localStorage.setItem(STORAGE_KEY, JSON.stringify(l)); }
 
-    function saveEvents(l) {
-      try { localStorage.setItem(STORAGE_KEY, JSON.stringify(l)); } catch(e) {}
-    }
-
+    // ── Firebase sync ──────────────────────────────────────────────
     async function saveEventToFirebase(ev) {
-      if (!db) return;
       try { await db.collection('eventos').doc(String(ev.id)).set(ev); } catch(e) { console.warn(e); }
     }
 
     async function deleteEventFromFirebase(ev) {
-      if (!db) return;
       try {
         const docId = ev.docId || String(ev.id);
         await db.collection('eventos').doc(docId).delete();
@@ -183,86 +179,160 @@
     }
 
     function formatDate(iso) {
-      if (!iso || typeof iso !== 'string') return '';
+      if (!iso) return '';
       const parts = iso.split('-');
       const months = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
       if (parts.length === 2) {
-        const mIdx = parseInt(parts[0]) - 1;
-        return `${parts[1]} ${months[mIdx] || ''}`;
+        return `${parts[1]} ${months[+parts[0] - 1]}`;
       }
-      if (parts.length === 3) {
-        const mIdx = parseInt(parts[1]) - 1;
-        return `${parts[2]} ${months[mIdx] || ''}`;
-      }
-      return iso;
+      const [, m, d] = parts;
+      return `${d} ${months[+m - 1]}`;
     }
 
     function daysUntil(iso) {
-      if (!iso || typeof iso !== 'string') return 999;
-      try {
-        const today = new Date(); today.setHours(0,0,0,0);
-        const parts = iso.split('-');
-        let m, d;
-        if (parts.length === 2) { [m, d] = parts; }
-        else if (parts.length === 3) { [, m, d] = parts; }
-        else return 999;
-        
-        let next = new Date(today.getFullYear(), parseInt(m) - 1, parseInt(d));
-        if (isNaN(next.getTime())) return 999;
-        if (next < today) next.setFullYear(next.getFullYear() + 1);
-        return Math.round((next - today) / 86400000);
-      } catch (e) {
-        return 999;
+      const today = new Date(); today.setHours(0,0,0,0);
+      const parts = iso.split('-');
+      let m, d;
+      if (parts.length === 2) {
+        [m, d] = parts;
+      } else {
+        [, m, d] = parts;
       }
+      let next = new Date(today.getFullYear(), +m - 1, +d);
+      if (next < today) next.setFullYear(next.getFullYear() + 1);
+      return Math.round((next - today) / 86400000);
     }
 
-    // Service Worker
+    // ── Service Worker ──────────────────────────────────────────────
     let swRegistration = null;
+
     async function registerServiceWorker() {
       if (!('serviceWorker' in navigator)) return null;
       try {
+        // Forzar actualización del SW si hay una versión nueva
         swRegistration = await navigator.serviceWorker.register('./sw.js', { scope: './', updateViaCache: 'none' });
+
+        // Forzar activación inmediata si hay un SW esperando
+        if (swRegistration.waiting) {
+          swRegistration.waiting.postMessage({ type: 'SKIP_WAITING' });
+        }
+
+        // Escuchar nuevas instalaciones
+        swRegistration.addEventListener('updatefound', () => {
+          const newSW = swRegistration.installing;
+          if (newSW) {
+            newSW.addEventListener('statechange', () => {
+              if (newSW.state === 'installed' && navigator.serviceWorker.controller) {
+                newSW.postMessage({ type: 'SKIP_WAITING' });
+              }
+            });
+          }
+        });
+
+        // Esperar a que el SW esté activo
+        if (swRegistration.installing) {
+          await new Promise(resolve => {
+            swRegistration.installing.addEventListener('statechange', function handler(e) {
+              if (e.target.state === 'activated') {
+                e.target.removeEventListener('statechange', handler);
+                resolve();
+              }
+            });
+          });
+        }
+
+        // Periodic sync si está soportado (Chrome Android, user engagement alto)
+        if ('periodicSync' in swRegistration) {
+          try {
+            const status = await navigator.permissions.query({ name: 'periodic-background-sync' });
+            if (status.state === 'granted') {
+              await swRegistration.periodicSync.register('of-daily-check', {
+                minInterval: 12 * 60 * 60 * 1000 // 12 horas
+              });
+              console.log('[App] periodicSync registrado');
+            }
+          } catch (_) { /* periodicSync puede no estar disponible */ }
+        }
+
         return swRegistration;
       } catch (err) {
-        console.warn('[SW] Error:', err);
+        console.warn('[App] SW registration failed:', err);
         return null;
       }
+    }
+
+    function waitForActiveSW(reg, timeoutMs = 5000) {
+      if (reg && reg.active) return Promise.resolve(reg.active);
+      return new Promise((resolve) => {
+        if (!reg) { resolve(null); return; }
+        const timer = setTimeout(() => resolve(null), timeoutMs);
+        const checkState = (sw) => {
+          sw.addEventListener('statechange', function handler() {
+            if (sw.state === 'activated') {
+              sw.removeEventListener('statechange', handler);
+              clearTimeout(timer);
+              resolve(sw);
+            }
+          });
+        };
+        if (reg.waiting)    checkState(reg.waiting);
+        if (reg.installing) checkState(reg.installing);
+        reg.addEventListener('updatefound', () => {
+          if (reg.installing) checkState(reg.installing);
+        });
+      });
     }
 
     async function syncEventsToSW(events) {
       try {
         const reg = swRegistration || await registerServiceWorker();
-        if (!reg || !reg.active) return;
-        reg.active.postMessage({ type: 'SCHEDULE_EVENTS', events });
-      } catch (err) {}
+        if (!reg) return;
+        const sw = await waitForActiveSW(reg, 5000);
+        if (!sw) { console.warn('[App] SW no disponible para sync'); return; }
+        sw.postMessage({ type: 'SCHEDULE_EVENTS', events });
+        console.log('[App] eventos enviados al SW:', events.length);
+
+        // También registrar Background Sync (one-shot) como respaldo
+        if ('sync' in reg) {
+          try { await reg.sync.register('of-check'); } catch (_) {}
+        }
+      } catch (err) {
+        console.warn('[App] syncEventsToSW error:', err);
+      }
     }
 
+    // ── Icon wrapper (Lucide via UMD) ──────────────────────────────
     function Icon({ name, size = 18, className = '' }) {
       const ref = useRef(null);
       useEffect(() => {
         if (ref.current && window.lucide) {
           ref.current.innerHTML = '';
-          const iconType = lucide[name] || lucide['HelpCircle'];
-          if (iconType) {
-            const icon = lucide.createElement(iconType);
-            icon.setAttribute('width', size);
-            icon.setAttribute('height', size);
-            if (className) icon.setAttribute('class', className);
-            ref.current.appendChild(icon);
-          }
+          const icon = lucide.createElement(lucide[name] || lucide['HelpCircle']);
+          icon.setAttribute('width', size);
+          icon.setAttribute('height', size);
+          if (className) icon.setAttribute('class', className);
+          ref.current.appendChild(icon);
         }
       }, [name, size, className]);
       return <span ref={ref} style={{display:'inline-flex',alignItems:'center'}} />;
     }
 
+    // ── Toast ──────────────────────────────────────────────────────
     function Toast({ message, visible }) {
       return (
-        <div className={`fixed bottom-6 left-1/2 z-50 px-5 py-2.5 rounded-full bg-gradient-to-r from-gold to-gold-light text-navy font-cinzel text-xs tracking-widest uppercase shadow-lg pointer-events-none transition-all duration-300 ${visible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-4'}`} style={{ transform: 'translateX(-50%)' }}>
+        <div
+          className={`fixed bottom-6 left-1/2 z-50 px-5 py-2.5 rounded-full
+            bg-gradient-to-r from-gold to-gold-light text-navy-DEFAULT
+            font-cinzel text-xs tracking-widest uppercase shadow-lg pointer-events-none
+            ${visible ? 'toast-in' : 'toast-out opacity-0'}`}
+          style={{ transform: 'translateX(-50%)', whiteSpace: 'nowrap' }}
+        >
           {message}
         </div>
       );
     }
 
+    // ── Divider ────────────────────────────────────────────────────
     function Divider({ label }) {
       return (
         <div className="flex items-center gap-3 my-6">
@@ -273,14 +343,17 @@
       );
     }
 
+    // ── Card ───────────────────────────────────────────────────────
     function Card({ children, className = '' }) {
       return (
-        <div className={`rounded-lg border gold-border bg-navy-mid/80 shadow-xl ring-1 ring-gold/5 backdrop-blur-sm ${className}`}>
+        <div className={`rounded-lg border gold-border bg-navy-mid/80 shadow-xl
+          ring-1 ring-gold/5 backdrop-blur-sm ${className}`}>
           {children}
         </div>
       );
     }
 
+    // ── App ────────────────────────────────────────────────────────
     function App() {
       const [events, setEvents]       = useState(loadEvents);
       const [nombre, setNombre]       = useState('');
@@ -292,28 +365,30 @@
       const [loading, setLoading]     = useState(true);
       const toastTimer = useRef(null);
 
-      // Sincronización inicial
+      // Registrar SW al montar (antes de cargar Firebase)
       useEffect(() => {
         registerServiceWorker().then(async reg => {
+          // Si ya tiene permiso, sincronizar eventos y refrescar token FCM en Firestore
           if (reg && Notification.permission === 'granted') {
+            const cached = loadEvents();
+            if (cached.length > 0) syncEventsToSW(cached);
             if (window._registrarTokenFCM) await window._registrarTokenFCM();
           }
         });
       }, []);
 
-      // Firebase Listener
+      // Cargar desde Firebase con listener en tiempo real
       useEffect(() => {
-        if (!db) {
-          setLoading(false);
-          return;
-        }
         const unsub = db.collection('eventos').onSnapshot(
           snap => {
             const fbEvents = snap.docs.map(d => ({ docId: d.id, ...d.data() }));
             setEvents(fbEvents);
             saveEvents(fbEvents);
             setLoading(false);
-            if (Notification.permission === 'granted') syncEventsToSW(fbEvents);
+            // Sincronizar con SW cada vez que cambien los eventos
+            if (Notification.permission === 'granted') {
+              syncEventsToSW(fbEvents);
+            }
           },
           err => {
             console.warn('Firebase error:', err);
@@ -329,21 +404,21 @@
         toastTimer.current = setTimeout(() => setToast(t => ({ ...t, visible: false })), 2800);
       }, []);
 
-      // Cálculo seguro de eventos ordenados
-      const sorted = useMemo(() => {
-        if (!events || !Array.isArray(events)) return [];
-        return [...events].sort((a,b) => daysUntil(a.fecha) - daysUntil(b.fecha));
-      }, [events]);
+      const sorted = [...events].sort((a,b) => daysUntil(a.fecha) - daysUntil(b.fecha));
 
       async function handleSave() {
         if (!nombre.trim()) { showToast('Ingresa el nombre'); return; }
         if (!mes || !dia)    { showToast('Selecciona mes y día'); return; }
         if (!tipo)           { showToast('Selecciona el tipo de evento'); return; }
-        const fecha = `${String(mes).padStart(2,'0')}-${String(dia).padStart(2,'0')}`;
+        const mesStr = String(mes).padStart(2,'0');
+        const diaStr = String(dia).padStart(2,'0');
+        const fecha = `${mesStr}-${diaStr}`;
         const ev = { id: Date.now(), nombre: nombre.trim(), fecha, tipo };
         await saveEventToFirebase(ev);
+        await scheduleNotification(ev);
         setNombre(''); setMes(''); setDia(''); setTipo('');
         showToast('Evento registrado ✦');
+        // La sincronización con SW se hará automáticamente cuando Firebase actualice
       }
 
       async function handleDelete(id) {
@@ -354,6 +429,12 @@
 
       async function handleNotify() {
         if (!('Notification' in window)) { showToast('Navegador no soportado'); return; }
+        if (notifPerm === 'granted') {
+          // Ya tiene permiso: re-sincronizar eventos con el SW
+          await syncEventsToSW(events);
+          showToast('Notificaciones ya activas ✦');
+          return;
+        }
         const perm = await Notification.requestPermission();
         setNotifPerm(perm);
         if (perm === 'granted') {
@@ -365,111 +446,252 @@
         }
       }
 
-      if (loading) {
-        return (
-          <div className="min-h-screen bg-navy bg-grid flex items-center justify-center">
-            <div className="text-center">
-              <div className="text-gold text-4xl mb-4">✦</div>
-              <p className="font-cinzel text-gold/70 text-sm tracking-widest uppercase">Cargando eventos...</p>
-            </div>
-          </div>
-        );
-      }
-
       const notifGranted = notifPerm === 'granted';
+
+      if (loading) return (
+        <div className="min-h-screen bg-navy bg-grid flex items-center justify-center">
+          <div className="text-center">
+            <div className="text-gold text-4xl mb-4">✦</div>
+            <p className="font-cinzel text-gold/70 text-sm tracking-widest uppercase">Cargando eventos...</p>
+          </div>
+        </div>
+      );
 
       return (
         <div className="min-h-screen bg-navy bg-grid">
+
+          {/* ── Header ── */}
           <header className="sticky top-0 z-40 bg-navy/95 backdrop-blur border-b gold-border">
             <div className="max-w-lg mx-auto px-4 py-3 flex items-center gap-3">
               <div>
-                <h1 className="font-cinzel text-gold-light tracking-widest uppercase text-sm font-bold leading-tight">Registro de Eventos</h1>
-                <p className="font-cinzel text-gold/50 tracking-[0.2em] uppercase text-xs mt-0.5">Oriente Fraterno · 148</p>
+                <h1 className="font-cinzel text-gold-light tracking-widest uppercase text-sm font-bold leading-tight">
+                  Registro de Eventos
+                </h1>
+                <p className="font-cinzel text-gold/50 tracking-[0.2em] uppercase text-xs mt-0.5">
+                  Oriente Fraterno · 148
+                </p>
               </div>
             </div>
           </header>
 
           <main className="max-w-lg mx-auto px-4 pb-24">
+
+            {/* ── Notifications ── */}
             <Divider label="Notificaciones" />
             <Card className="p-4">
-              <button onClick={handleNotify} className={`w-full flex items-center justify-center gap-2 py-2.5 px-4 rounded font-cinzel text-xs tracking-widest uppercase border transition-all ${notifGranted ? 'border-gold/50 text-gold-light bg-gold/10' : 'border-gold/30 text-gold hover:bg-gold/10'}`}>
+              <button
+                onClick={handleNotify}
+                className={`w-full flex items-center justify-center gap-2 py-2.5 px-4 rounded
+                  font-cinzel text-xs tracking-widest uppercase border transition-all
+                  ${notifGranted
+                    ? 'border-gold/50 text-gold-light bg-gold/10'
+                    : 'border-gold/30 text-gold hover:bg-gold/10'}`}
+              >
                 <Icon name={notifGranted ? 'BellRing' : 'Bell'} size={15} />
                 {notifGranted ? 'Notificaciones Activas ✦' : 'Activar Notificaciones Web'}
               </button>
+              <p className="text-center text-gold/50 text-xs italic mt-2 tracking-wide">
+                {notifGranted
+                  ? 'Service Worker activo · Recibirás alertas a las 9:00 AM en cada fecha ✦'
+                  : 'Activa para recibir alertas a las 9:00 AM en cada fecha'}
+              </p>
             </Card>
 
+            {/* ── Form ── */}
             <Divider label="Nuevo Registro" />
             <Card className="p-5">
               <div className="space-y-4">
+
+                {/* Nombre */}
                 <div>
-                  <label className="block font-cinzel text-gold text-xs tracking-widest uppercase mb-1.5">Nombre</label>
-                  <input type="text" value={nombre} onChange={e => setNombre(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleSave()} placeholder="Ej: José López" className="w-full bg-navy/70 border gold-border rounded px-3 py-2.5 text-white font-crimson text-base placeholder-white/25 focus:outline-none gold-glow focus:border-gold/70 transition" />
+                  <label className="block font-cinzel text-gold text-xs tracking-widest uppercase mb-1.5">
+                    Nombre
+                  </label>
+                  <input
+                    type="text"
+                    value={nombre}
+                    onChange={e => setNombre(e.target.value)}
+                    onKeyDown={e => e.key === 'Enter' && handleSave()}
+                    placeholder="Ej: José López"
+                    className="w-full bg-navy/70 border gold-border rounded px-3 py-2.5
+                      text-white font-crimson text-base placeholder-white/25
+                      focus:outline-none gold-glow focus:border-gold/70 transition"
+                  />
                 </div>
-                <div className="flex gap-2">
-                  <select value={mes} onChange={e => setMes(e.target.value)} className="flex-1 bg-navy/70 border gold-border rounded px-3 py-2.5 text-white font-crimson text-base focus:outline-none">
-                    <option value="">— Mes —</option>
-                    {['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'].map((m,i) => (
-                      <option key={i+1} value={String(i+1).padStart(2,'0')}>{m}</option>
-                    ))}
-                  </select>
-                  <select value={dia} onChange={e => setDia(e.target.value)} className="w-28 bg-navy/70 border gold-border rounded px-3 py-2.5 text-white font-crimson text-base focus:outline-none">
-                    <option value="">— Día —</option>
-                    {Array.from({length:31},(_,i)=>i+1).map(d => (
-                      <option key={d} value={String(d).padStart(2,'0')}>{d}</option>
-                    ))}
-                  </select>
+
+                {/* Fecha */}
+                <div>
+                  <label className="block font-cinzel text-gold text-xs tracking-widest uppercase mb-1.5">
+                    Fecha del Evento
+                  </label>
+                  <div className="flex gap-2">
+                    <div className="relative flex-1">
+                      <select
+                        value={mes}
+                        onChange={e => setMes(e.target.value)}
+                        className="w-full appearance-none bg-navy/70 border gold-border rounded px-3 py-2.5
+                          text-white font-crimson text-base cursor-pointer
+                          focus:outline-none gold-glow focus:border-gold/70 transition pr-8"
+                      >
+                        <option value="">— Mes —</option>
+                        {['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'].map((m,i) => (
+                          <option key={i+1} value={String(i+1).padStart(2,'0')}>{m}</option>
+                        ))}
+                      </select>
+                      <div className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-gold">
+                        <Icon name="ChevronDown" size={14} />
+                      </div>
+                    </div>
+                    <div className="relative w-28">
+                      <select
+                        value={dia}
+                        onChange={e => setDia(e.target.value)}
+                        className="w-full appearance-none bg-navy/70 border gold-border rounded px-3 py-2.5
+                          text-white font-crimson text-base cursor-pointer
+                          focus:outline-none gold-glow focus:border-gold/70 transition pr-8"
+                      >
+                        <option value="">— Día —</option>
+                        {Array.from({length:31},(_,i)=>i+1).map(d => (
+                          <option key={d} value={String(d).padStart(2,'0')}>{d}</option>
+                        ))}
+                      </select>
+                      <div className="pointer-events-none absolute right-2 top-1/2 -translate-y-1/2 text-gold">
+                        <Icon name="ChevronDown" size={14} />
+                      </div>
+                    </div>
+                  </div>
                 </div>
-                <select value={tipo} onChange={e => setTipo(e.target.value)} className="w-full bg-navy/70 border gold-border rounded px-3 py-2.5 text-white font-crimson text-base focus:outline-none">
-                  <option value="">— Seleccionar evento —</option>
-                  {TIPOS.map(t => ( <option key={t.value} value={t.value}>{t.emoji} {t.label}</option> ))}
-                </select>
-                <button onClick={handleSave} className="w-full py-3 rounded font-cinzel text-xs tracking-widest uppercase bg-gradient-to-r from-gold via-gold-light to-gold text-navy font-bold shadow-lg shadow-gold/20 flex items-center justify-center gap-2">
-                  <Icon name="PlusCircle" size={15} /> Registrar Evento
+
+                {/* Tipo */}
+                <div>
+                  <label className="block font-cinzel text-gold text-xs tracking-widest uppercase mb-1.5">
+                    Tipo de Evento
+                  </label>
+                  <div className="relative">
+                    <select
+                      value={tipo}
+                      onChange={e => setTipo(e.target.value)}
+                      className="w-full appearance-none bg-navy/70 border gold-border rounded px-3 py-2.5
+                        text-white font-crimson text-base cursor-pointer
+                        focus:outline-none gold-glow focus:border-gold/70 transition pr-10"
+                    >
+                      <option value="">— Seleccionar evento —</option>
+                      {TIPOS.map(t => (
+                        <option key={t.value} value={t.value}>{t.emoji} {t.label}</option>
+                      ))}
+                    </select>
+                    <div className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-gold">
+                      <Icon name="ChevronDown" size={16} />
+                    </div>
+                  </div>
+                </div>
+
+                {/* Submit */}
+                <button
+                  onClick={handleSave}
+                  className="w-full py-3 rounded font-cinzel text-xs tracking-widest uppercase
+                    bg-gradient-to-r from-gold via-gold-light to-gold text-navy font-bold
+                    hover:brightness-110 active:scale-[0.98] transition-all
+                    shadow-lg shadow-gold/20 flex items-center justify-center gap-2"
+                >
+                  <Icon name="PlusCircle" size={15} />
+                  Registrar Evento
                 </button>
               </div>
             </Card>
 
-            <Divider label={`Eventos Registrados (${sorted.length})`} />
+            {/* ── List ── */}
+            <Divider label={`Eventos Registrados${events.length ? ` (${events.length})` : ''}`} />
             <Card className="p-3">
               {sorted.length === 0 ? (
-                <div className="text-center py-12 text-white/25 italic text-sm">No hay eventos registrados aún.</div>
+                <div className="text-center py-12 text-white/25">
+                  <div className="text-4xl mb-3 opacity-40">✦</div>
+                  <p className="font-crimson italic text-sm tracking-wide">
+                    No hay eventos registrados aún.<br />Ingresa el primer registro.
+                  </p>
+                </div>
               ) : (
                 <div className="space-y-2">
                   {sorted.map((ev) => {
-                    const cfg = TIPOS.find(t => t.value === ev.tipo) || { emoji: '📌' };
+                    const cfg  = TIPOS.find(t => t.value === ev.tipo) || { emoji: '📌' };
                     const days = daysUntil(ev.fecha);
+                    const isToday = days === 0;
+                    const soon    = days <= 7 && days > 0;
                     return (
-                      <div key={ev.docId || ev.id} className={`flex items-center gap-3 p-3 rounded border ${TIPO_STYLES[ev.tipo] || 'bg-navy/50 border-white/10'}`}>
-                        <div className="w-10 h-10 rounded-full border border-gold/20 flex items-center justify-center text-lg bg-black/20">{cfg.emoji}</div>
-                        <div className="flex-1 min-w-0">
-                          <p className="font-cinzel text-white text-sm font-semibold truncate">{ev.nombre}</p>
-                          <p className="text-gold text-xs uppercase">{ev.tipo} · {formatDate(ev.fecha)}</p>
-                          <p className="text-white/40 text-xs">{days === 0 ? 'HOY ✦' : `En ${days} días`}</p>
+                      <div
+                        key={ev.docId || ev.id}
+                        className={`fade-in flex items-center gap-3 p-3 rounded border transition-all
+                          hover:border-gold/40 ${TIPO_STYLES[ev.tipo] || 'bg-navy/50 border-white/10'}`}
+                      >
+                        {/* Emoji badge */}
+                        <div className="flex-shrink-0 w-10 h-10 rounded-full border border-gold/20
+                          flex items-center justify-center text-lg bg-black/20">
+                          {cfg.emoji}
                         </div>
-                        <button onClick={() => handleDelete(ev.docId || ev.id)} className="p-1.5 text-red-500/60 hover:text-red-400"><Icon name="Trash2" size={14} /></button>
+
+                        {/* Details */}
+                        <div className="flex-1 min-w-0">
+                          <p className="font-cinzel text-white text-sm font-semibold truncate">
+                            {ev.nombre}
+                          </p>
+                          <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5 mt-0.5">
+                            <span className="font-cinzel text-gold text-xs tracking-wide uppercase">
+                              {ev.tipo}
+                            </span>
+                            <span className="text-white/40 text-xs">·</span>
+                            <span className="text-white/50 text-xs">{formatDate(ev.fecha)}</span>
+                          </div>
+                          {/* Days badge */}
+                          <div className="mt-1">
+                            {isToday ? (
+                              <span className="inline-flex items-center gap-1 text-xs bg-gold/20 text-gold-light
+                                border border-gold/30 rounded-full px-2 py-0.5 font-cinzel tracking-wider">
+                                <Icon name="Star" size={10} /> HOY
+                              </span>
+                            ) : soon ? (
+                              <span className="inline-flex items-center gap-1 text-xs bg-amber-900/30 text-amber-300
+                                border border-amber-600/20 rounded-full px-2 py-0.5 font-cinzel tracking-wider">
+                                <Icon name="Clock" size={10} /> En {days} día{days !== 1 ? 's' : ''}
+                              </span>
+                            ) : (
+                              <span className="text-white/30 text-xs">
+                                En {days} días
+                              </span>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Delete */}
+                        <button
+                          onClick={() => handleDelete(ev.docId || ev.id)}
+                          className="flex-shrink-0 p-1.5 rounded border border-red-900/40 text-red-500/60
+                            hover:bg-red-900/20 hover:text-red-400 hover:border-red-700/50 transition-all"
+                          title="Eliminar"
+                        >
+                          <Icon name="Trash2" size={14} />
+                        </button>
                       </div>
                     );
                   })}
                 </div>
               )}
             </Card>
+
           </main>
+
+          {/* ── Footer ── */}
           <footer className="text-center pb-8 pt-2">
             <p className="font-cinzel text-gold/25 text-xs tracking-[0.2em] uppercase">✦ A L:. G:. A:. D:. U:. ✦</p>
+            <p className="font-crimson italic text-xs mt-1" style={{color:'rgba(201,168,76,0.45)'}}>Creación: Carlos Aristimuño 2026</p>
           </footer>
+
+          {/* ── Toast ── */}
           <Toast message={toast.msg} visible={toast.visible} />
         </div>
       );
     }
 
-    const rootElement = document.getElementById('root');
-    if (rootElement) {
-      try {
-        ReactDOM.createRoot(rootElement).render(<App />);
-      } catch (e) {
-        rootElement.innerHTML = '<div style="color:white;text-align:center;padding:20px;">Error al iniciar React: ' + e.message + '</div>';
-      }
-    }
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
   </script>
 </body>
 </html>
