@@ -149,6 +149,128 @@
 
     const STORAGE_KEY = 'orienteFraterno_v2';
 
+    // ── Detección de plataforma ───────────────────────────────────────────────
+    function detectPlatform() {
+      const ua = navigator.userAgent || '';
+      const isIOS     = /iPhone|iPad|iPod/i.test(ua);
+      const isAndroid = /Android/i.test(ua);
+      // Detectar si está instalada como PWA (standalone)
+      const isStandalone = window.matchMedia('(display-mode: standalone)').matches
+                        || window.navigator.standalone === true;
+      return { isIOS, isAndroid, isStandalone };
+    }
+
+    // Versión de iOS extraída del user agent (ej: "16.4" → 16.4)
+    function getIOSVersion() {
+      const match = navigator.userAgent.match(/OS (\d+)_(\d+)/);
+      if (!match) return null;
+      return parseFloat(`${match[1]}.${match[2]}`);
+    }
+
+    // ── Pantalla de bienvenida ────────────────────────────────────────────────
+    function WelcomeScreen({ onClose }) {
+      const { isIOS, isAndroid } = detectPlatform();
+      const iosVersion = isIOS ? getIOSVersion() : null;
+      const iosOld = isIOS && iosVersion !== null && iosVersion < 16.4;
+
+      return (
+        <div className="fixed inset-0 z-50 bg-navy flex flex-col items-center justify-center px-6 bg-grid">
+          {/* Fondo decorativo igual que la app */}
+          <div className="w-full max-w-sm flex flex-col items-center gap-6">
+
+            {/* Logo / título */}
+            <div className="text-center mb-2">
+              <div className="text-gold text-5xl mb-3">✦</div>
+              <h1 className="font-cinzel text-gold-light tracking-widest uppercase text-base font-bold leading-tight">
+                Oriente Fraterno · 148
+              </h1>
+              <p className="font-cinzel text-gold/50 tracking-widest uppercase text-xs mt-1">
+                Bienvenido
+              </p>
+            </div>
+
+            {/* Tarjeta de instrucciones según plataforma */}
+            <div className="w-full rounded-lg border gold-border bg-navy-mid/80 shadow-xl ring-1 ring-gold/5 p-5 space-y-4">
+
+              {/* Notificaciones: instrucción común */}
+              <div className="flex gap-3 items-start">
+                <span className="text-gold text-lg mt-0.5">🔔</span>
+                <p className="font-crimson text-white/80 text-base leading-snug">
+                  Para recibir avisos el día de cada evento, tocá <span className="text-gold font-semibold">Activar Notificaciones Web</span> en la pantalla principal.
+                </p>
+              </div>
+
+              {/* Android específico */}
+              {isAndroid && (
+                <>
+                  <div className="h-px bg-gold/15" />
+                  <div className="flex gap-3 items-start">
+                    <span className="text-gold text-lg mt-0.5">📲</span>
+                    <p className="font-crimson text-white/80 text-base leading-snug">
+                      Si alguna vez desinstalás y volvés a instalar la app, <span className="text-gold font-semibold">abrila una vez</span> para que el sistema te vuelva a registrar y seguir recibiendo notificaciones.
+                    </p>
+                  </div>
+                </>
+              )}
+
+              {/* iOS actualizado (16.4+) */}
+              {isIOS && !iosOld && (
+                <>
+                  <div className="h-px bg-gold/15" />
+                  <div className="flex gap-3 items-start">
+                    <span className="text-gold text-lg mt-0.5">⚙️</span>
+                    <div className="font-crimson text-white/80 text-base leading-snug space-y-2">
+                      <p>Para que las notificaciones lleguen con el teléfono bloqueado, verificá en <span className="text-gold font-semibold">Ajustes → Aplicaciones → Safari → Notificaciones</span> que estén activadas.</p>
+                      <p>También asegurate de que esta app <span className="text-gold font-semibold">no esté en modo No Molestar</span> en Ajustes → Focus.</p>
+                    </div>
+                  </div>
+                </>
+              )}
+
+              {/* iOS desactualizado (menor a 16.4) */}
+              {iosOld && (
+                <>
+                  <div className="h-px bg-gold/15" />
+                  <div className="flex gap-3 items-start">
+                    <span className="text-gold text-lg mt-0.5">⚠️</span>
+                    <p className="font-crimson text-amber-300/90 text-base leading-snug">
+                      Tu versión de iOS ({iosVersion}) no soporta notificaciones en apps web. Actualizá a <span className="font-semibold">iOS 16.4 o superior</span> para recibirlas.
+                    </p>
+                  </div>
+                </>
+              )}
+
+              {/* Escritorio / otro */}
+              {!isIOS && !isAndroid && (
+                <>
+                  <div className="h-px bg-gold/15" />
+                  <div className="flex gap-3 items-start">
+                    <span className="text-gold text-lg mt-0.5">💡</span>
+                    <p className="font-crimson text-white/80 text-base leading-snug">
+                      Para la mejor experiencia en móvil, instalá esta app desde Safari (iOS) o Chrome (Android) usando la opción <span className="text-gold font-semibold">Agregar a pantalla de inicio</span>.
+                    </p>
+                  </div>
+                </>
+              )}
+
+            </div>
+
+            {/* Botón cerrar */}
+            <button
+              onClick={onClose}
+              className="w-full py-3 rounded font-cinzel text-xs tracking-widest uppercase bg-gradient-to-r from-gold via-gold-light to-gold text-navy font-bold shadow-lg shadow-gold/20"
+            >
+              Entendido ✦
+            </button>
+
+            <p className="font-cinzel text-gold/25 text-xs tracking-[0.2em] uppercase">
+              ✦ A L:. G:. A:. D:. U:. ✦
+            </p>
+          </div>
+        </div>
+      );
+    }
+
     const TIPOS = [
       { value: 'Cumpleaños',               label: 'Cumpleaños',               emoji: '🎂' },
       { value: 'Fecha de casamiento',       label: 'Fecha de casamiento',       emoji: '💍' },
@@ -320,6 +442,9 @@
       const [notifPerm, setNotifPerm] = useState(() => typeof Notification !== 'undefined' ? Notification.permission : 'denied');
       const [toast, setToast]         = useState({ msg:'', visible:false });
       const [loading, setLoading]     = useState(true);
+      // Pantalla de bienvenida: visible siempre al iniciar (se cierra con el botón).
+      // No usa localStorage → vuelve a aparecer cada vez que se instala/reinstala.
+      const [showWelcome, setShowWelcome] = useState(true);
       const toastTimer = useRef(null);
 
       // ── FIX 3: inicialización con periodic sync y re-registro de token ──────
@@ -405,6 +530,10 @@
         } else {
           showToast('Permiso denegado');
         }
+      }
+
+      if (showWelcome) {
+        return <WelcomeScreen onClose={() => setShowWelcome(false)} />;
       }
 
       if (loading) {
