@@ -1,10 +1,10 @@
-// Oriente Fraterno 148 - Service Worker v12
+// Oriente Fraterno 148 - Service Worker v13
 // Maneja notificaciones FCM en background y lógica local de respaldo
 
 importScripts('https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js');
 importScripts('https://www.gstatic.com/firebasejs/10.8.0/firebase-messaging-compat.js');
 
-const SW_VERSION = 'of-sw-v12';
+const SW_VERSION = 'of-sw-v13';
 const DB_NAME    = 'of_sw';
 const DB_VERSION = 1;
 
@@ -21,15 +21,14 @@ const messaging = firebase.messaging();
 
 // ── Handler de notificaciones en background ───────────────────────────────────
 //
-// El workflow ahora envía webpush.notification en el payload (además de data).
-// Esto significa:
-//   - iOS PWA: FCM/WebKit muestra la notificación AUTOMÁTICAMENTE sin pasar por este
-//     handler, garantizando que llegue aunque el SDK compat no sea 100% compatible
-//     con Safari WebKit.
-//   - Android/Chrome: Firebase SDK detecta el campo notification, muestra la notif
-//     automáticamente Y llama a onBackgroundMessage.
+// El workflow envía webpush.notification en el payload (además de data).
+// Esto garantiza:
+//   - iOS PWA (16.4+): FCM/WebKit muestra la notificación AUTOMÁTICAMENTE sin
+//     pasar por este handler, ya que WebKit procesa webpush.notification directo.
+//   - Android/Chrome: FCM muestra la notif automáticamente desde webpush.notification
+//     Y llama a onBackgroundMessage.
 //
-// Por eso este handler NO llama a showNotification() — ya fue mostrada.
+// Por eso este handler NO llama a showNotification() — ya fue mostrada por FCM.
 // Solo ejecuta markFcmFiredToday() para que checkAndNotify() no duplique
 // la notificación si el usuario abre la app más tarde ese mismo día.
 //
@@ -49,8 +48,6 @@ messaging.onBackgroundMessage(payload => {
 });
 
 // ── Marca en fired[] los eventos de hoy notificados por FCM ──────────────────
-// Evita que checkAndNotify repita la notificación si el usuario abre la app
-// más tarde en el mismo día.
 async function markFcmFiredToday() {
   try {
     const events = await dbGet('events');
@@ -125,9 +122,24 @@ self.addEventListener('message', async e => {
   if (e.data.type === 'SKIP_WAITING') self.skipWaiting();
 });
 
-// ── Background sync ───────────────────────────────────────────────────────────
-self.addEventListener('periodicsync', e => { if (e.tag === 'of-daily-check') e.waitUntil(checkAndNotify()); });
-self.addEventListener('sync',         e => { if (e.tag === 'of-check')       e.waitUntil(checkAndNotify()); });
+// ── Background Periodic Sync ──────────────────────────────────────────────────
+// FIX: ahora el registro de 'of-daily-check' se hace desde index.html al abrir
+// la app (registrarPeriodicSync). Este listener lo ejecuta cuando Chrome lo
+// dispara en background (Android). En iOS no aplica (WebKit no soporta esta API).
+self.addEventListener('periodicsync', e => {
+  if (e.tag === 'of-daily-check') {
+    console.log('[SW] Periodic sync disparado');
+    e.waitUntil(checkAndNotify());
+  }
+});
+
+// ── Background Sync estándar (reconexión de red) ──────────────────────────────
+self.addEventListener('sync', e => {
+  if (e.tag === 'of-check') {
+    console.log('[SW] Background sync disparado');
+    e.waitUntil(checkAndNotify());
+  }
+});
 
 // ── Fetch ─────────────────────────────────────────────────────────────────────
 self.addEventListener('fetch', e => {
@@ -149,8 +161,10 @@ self.addEventListener('notificationclick', e => {
 });
 
 // ── Notificación local de respaldo ────────────────────────────────────────────
-// Solo se dispara si el push FCM no llegó (usuario sin internet a las 9 AM, etc.)
-// y el usuario abre la app más tarde ese día. El sistema fired[] evita duplicados.
+// Se dispara cuando:
+//   a) El periodic sync despierta el SW (Android Chrome, con la app cerrada)
+//   b) El usuario abre la app y hay un evento hoy que FCM no entregó
+// El sistema fired[] evita duplicados con las notificaciones FCM.
 async function checkAndNotify() {
   try {
     const events = await dbGet('events');
