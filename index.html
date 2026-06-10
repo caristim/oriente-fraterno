@@ -585,9 +585,18 @@
                   </select>
                   <select value={dia} onChange={e => setDia(e.target.value)} className="w-28 bg-navy/70 border gold-border rounded px-3 py-2.5 text-white font-crimson text-base focus:outline-none">
                     <option value="">— Día —</option>
-                    {Array.from({length:31},(_,i)=>i+1).map(d => (
-                      <option key={d} value={String(d).padStart(2,'0')}>{d}</option>
-                    ))}
+                    {(() => {
+                      // Días válidos según el mes seleccionado.
+                      // Febrero: máximo 29 (incluye el 29/Feb para aniversarios de
+                      // bisiestos; el workflow lo entrega el 28/Feb en años no bisiestos).
+                      const diasPorMes = [31,29,31,30,31,30,31,31,30,31,30,31];
+                      const maxDias = mes ? diasPorMes[parseInt(mes,10) - 1] : 31;
+                      // Si el día seleccionado ya no es válido para el nuevo mes, resetear
+                      if (dia && parseInt(dia,10) > maxDias) { setTimeout(() => setDia(''), 0); }
+                      return Array.from({length: maxDias}, (_,i) => i+1).map(d => (
+                        <option key={d} value={String(d).padStart(2,'0')}>{d}</option>
+                      ));
+                    })()}
                   </select>
                 </div>
                 <select value={tipo} onChange={e => setTipo(e.target.value)} className="w-full bg-navy/70 border gold-border rounded px-3 py-2.5 text-white font-crimson text-base focus:outline-none">
