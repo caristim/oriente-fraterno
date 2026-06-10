@@ -1,12 +1,26 @@
-// Oriente Fraterno 148 - Service Worker v13
+// Oriente Fraterno 148 - Service Worker v14
 // Maneja notificaciones FCM en background y lógica local de respaldo
 
 importScripts('https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js');
 importScripts('https://www.gstatic.com/firebasejs/10.8.0/firebase-messaging-compat.js');
 
-const SW_VERSION = 'of-sw-v13';
-const DB_NAME    = 'of_sw';
-const DB_VERSION = 1;
+const SW_VERSION  = 'of-sw-v14';
+const DB_NAME     = 'of_sw';
+const DB_VERSION  = 1;
+const APP_ORIGIN  = 'https://caristim.github.io';
+const APP_BASE    = 'https://caristim.github.io/oriente-fraterno/';
+const ICON_192    = 'https://caristim.github.io/oriente-fraterno/icon-192.png';
+const BADGE_URL   = 'https://caristim.github.io/oriente-fraterno/icon-192.png';
+
+// ── Recursos a pre-cachear para funcionar offline ─────────────────────────────
+const CACHE_NAME = 'of-cache-v14';
+const PRECACHE_URLS = [
+  'https://caristim.github.io/oriente-fraterno/',
+  'https://caristim.github.io/oriente-fraterno/index.html',
+  'https://caristim.github.io/oriente-fraterno/manifest.json',
+  'https://caristim.github.io/oriente-fraterno/icon-192.png',
+  'https://caristim.github.io/oriente-fraterno/icon-512.png',
+];
 
 firebase.initializeApp({
   apiKey:            'AIzaSyD9gQW61AvKHhNai6gljNFE7q9rS7KKuN8',
@@ -107,8 +121,32 @@ async function dbSet(key, value) {
 }
 
 // ── Lifecycle ─────────────────────────────────────────────────────────────────
-self.addEventListener('install',  ()  => { console.log('[SW]', SW_VERSION); self.skipWaiting(); });
-self.addEventListener('activate', e   => { e.waitUntil(self.clients.claim()); });
+self.addEventListener('install', e => {
+  console.log('[SW]', SW_VERSION);
+  // Pre-cachear recursos de la app para funcionamiento offline
+  e.waitUntil(
+    caches.open(CACHE_NAME).then(cache => {
+      return cache.addAll(PRECACHE_URLS).catch(err => {
+        // No bloquear instalación si falla algún recurso (ej: sin red)
+        console.warn('[SW] Pre-cache parcial:', err);
+      });
+    }).then(() => self.skipWaiting())
+  );
+});
+
+self.addEventListener('activate', e => {
+  // Limpiar cachés antiguas al activar nueva versión del SW
+  e.waitUntil(
+    caches.keys().then(keys =>
+      Promise.all(
+        keys.filter(k => k !== CACHE_NAME).map(k => {
+          console.log('[SW] Eliminando caché antigua:', k);
+          return caches.delete(k);
+        })
+      )
+    ).then(() => self.clients.claim())
+  );
+});
 
 // ── Mensajes desde la app ─────────────────────────────────────────────────────
 self.addEventListener('message', async e => {
@@ -123,9 +161,6 @@ self.addEventListener('message', async e => {
 });
 
 // ── Background Periodic Sync ──────────────────────────────────────────────────
-// FIX: ahora el registro de 'of-daily-check' se hace desde index.html al abrir
-// la app (registrarPeriodicSync). Este listener lo ejecuta cuando Chrome lo
-// dispara en background (Android). En iOS no aplica (WebKit no soporta esta API).
 self.addEventListener('periodicsync', e => {
   if (e.tag === 'of-daily-check') {
     console.log('[SW] Periodic sync disparado');
@@ -141,16 +176,49 @@ self.addEventListener('sync', e => {
   }
 });
 
-// ── Fetch ─────────────────────────────────────────────────────────────────────
+// ── Fetch: estrategia Cache-First para recursos propios, Network-First para el resto ──
 self.addEventListener('fetch', e => {
-  e.respondWith(fetch(e.request).catch(() => new Response('Sin conexión', { status: 503 })));
+  const url = e.request.url;
+
+  // Solo interceptar GETs
+  if (e.request.method !== 'GET') return;
+
+  // Recursos propios de la app (mismo origen GitHub Pages): Cache-First
+  if (url.startsWith(APP_BASE)) {
+    e.respondWith(
+      caches.match(e.request).then(cached => {
+        if (cached) return cached;
+        return fetch(e.request).then(response => {
+          // Cachear respuestas válidas
+          if (response && response.status === 200) {
+            const clone = response.clone();
+            caches.open(CACHE_NAME).then(cache => cache.put(e.request, clone));
+          }
+          return response;
+        }).catch(() => {
+          // Sin red y sin caché: devolver página principal si existe
+          return caches.match('https://caristim.github.io/oriente-fraterno/index.html')
+            || new Response('Sin conexión', { status: 503 });
+        });
+      })
+    );
+    return;
+  }
+
+  // Recursos externos (Firebase, CDNs): Network-First con fallback a caché
+  e.respondWith(
+    fetch(e.request).catch(() =>
+      caches.match(e.request).then(cached =>
+        cached || new Response('Sin conexión', { status: 503 })
+      )
+    )
+  );
 });
 
 // ── Clic en notificación ──────────────────────────────────────────────────────
 self.addEventListener('notificationclick', e => {
   e.notification.close();
-  const targetUrl = (e.notification.data && e.notification.data.url)
-    || 'https://caristim.github.io/oriente-fraterno/';
+  const targetUrl = (e.notification.data && e.notification.data.url) || APP_BASE;
   e.waitUntil(
     self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(clients => {
       const appClient = clients.find(c => c.url.includes('oriente-fraterno'));
@@ -188,13 +256,16 @@ async function checkAndNotify() {
       const fireKey = `${evId}-${now.getFullYear()}`;
       if (fired[fireKey]) continue;
       if (self.Notification && Notification.permission !== 'granted') continue;
+      // FIX: URLs absolutas para icon y badge (relativas fallan cuando el SW
+      // está en scope raíz o la app está cerrada)
       await self.registration.showNotification('Oriente Fraterno 148', {
         body:               `Hoy: ${ev.tipo} de ${ev.nombre}`,
         tag:                `of-local-${evId}`,
-        icon:               './icon-192.png',
-        badge:              './icon-192.png',
+        icon:               ICON_192,
+        badge:              BADGE_URL,
         requireInteraction: true,
         vibrate:            [200, 100, 200, 100, 200],
+        data:               { url: APP_BASE },
       });
       fired[fireKey] = true;
       changed = true;
