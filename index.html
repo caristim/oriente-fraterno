@@ -94,48 +94,55 @@
   </style>
 
   <script>
-    // ── FIX 1: registrarTokenFCM siempre escribe en Firestore ────────────────
-    // Antes solo escribía si el token había cambiado respecto a localStorage.
-    // Problema: si el workflow borraba el token de Firestore por inválido,
-    // localStorage aún lo tenía → la función no lo re-escribía → el usuario
-    // quedaba sin token y no recibía más notificaciones hasta que borrara caché.
-    // Ahora siempre hace set() (es idempotente y cuesta nada).
+    // CORRECCIÓN: Eliminamos la espera eterna del service worker para asegurar el registro del token
     async function registrarTokenFCM() {
       try {
         if (!('serviceWorker' in navigator) || !('Notification' in window) || !db) return;
+        
+        // Solicitar permiso explícito primero
+        const permiso = await Notification.requestPermission();
+        if (permiso !== 'granted') {
+          console.warn('[FCM] Permiso de notificaciones denegado por el usuario.');
+          return;
+        }
+
         const messaging = firebase.messaging();
+        
+        // Obtenemos el registro actual de forma directa
+        const reg = await navigator.serviceWorker.getRegistration('./');
+        
         const token = await messaging.getToken({
           vapidKey: 'BM1SqlyjKhW45Y2JSBqDTYRT5QBV0yduJBtonc_QrlqM1DgaDmanz_w1R0Qj40ZuiG-rz4s4stIqBuYmciutG9Y',
-          serviceWorkerRegistration: await navigator.serviceWorker.ready
+          serviceWorkerRegistration: reg
         });
+
         if (token) {
           const prevToken = localStorage.getItem('fcm_token');
-          // Borrar token anterior de Firestore si cambió
           if (prevToken && prevToken !== token) {
             try { await db.collection('fcm_tokens').doc(prevToken).delete(); } catch(_) {}
           }
-          // FIX: siempre escribir en Firestore, no solo cuando el token cambia.
-          // Esto recupera tokens que fueron borrados de Firestore por ser "inválidos"
-          // pero que FCM regeneró con el mismo valor.
+          
+          // Forzar la escritura limpia en la colección
           await db.collection('fcm_tokens').doc(token).set({
             token: token,
             updatedAt: new Date().toISOString()
           });
+          
           localStorage.setItem('fcm_token', token);
-          console.log('[FCM] Token registrado en Firestore:', token.substring(0, 20) + '...');
+          console.log('[FCM] Token registrado con éxito en Firestore.');
+          return true;
         }
       } catch(err) {
-        console.warn('[FCM] Error registrando token:', err.message);
+        console.error('[FCM] Error crítico registrando token:', err.message);
       }
+      return false;
     }
     window._registrarTokenFCM = registrarTokenFCM;
-    async function scheduleNotification(ev) {}
   </script>
 </head>
 
 <body class="bg-navy text-white bg-grid min-h-screen">
   <div id="root">
-    <!-- Mensaje de carga inicial por si JS tarda o falla -->
     <div class="min-h-screen flex items-center justify-center">
       <div class="text-center">
         <div class="text-gold text-4xl mb-4">✦</div>
@@ -146,28 +153,23 @@
 
   <script type="text/babel">
     const { useState, useEffect, useCallback, useRef, useMemo } = React;
-
     const STORAGE_KEY = 'orienteFraterno_v2';
 
-    // ── Detección de plataforma ───────────────────────────────────────────────
     function detectPlatform() {
       const ua = navigator.userAgent || '';
       const isIOS     = /iPhone|iPad|iPod/i.test(ua);
       const isAndroid = /Android/i.test(ua);
-      // Detectar si está instalada como PWA (standalone)
       const isStandalone = window.matchMedia('(display-mode: standalone)').matches
                         || window.navigator.standalone === true;
       return { isIOS, isAndroid, isStandalone };
     }
 
-    // Versión de iOS extraída del user agent (ej: "16.4" → 16.4)
     function getIOSVersion() {
       const match = navigator.userAgent.match(/OS (\d+)_(\d+)/);
       if (!match) return null;
       return parseFloat(`${match[1]}.${match[2]}`);
     }
 
-    // ── Pantalla de bienvenida ────────────────────────────────────────────────
     function WelcomeScreen({ onClose }) {
       const { isIOS, isAndroid } = detectPlatform();
       const iosVersion = isIOS ? getIOSVersion() : null;
@@ -175,10 +177,7 @@
 
       return (
         <div className="fixed inset-0 z-50 bg-navy flex flex-col items-center justify-center px-6 bg-grid">
-          {/* Fondo decorativo igual que la app */}
           <div className="w-full max-w-sm flex flex-col items-center gap-6">
-
-            {/* Logo / título */}
             <div className="text-center mb-2">
               <div className="text-gold text-5xl mb-3">✦</div>
               <h1 className="font-cinzel text-gold-light tracking-widest uppercase text-base font-bold leading-tight">
@@ -189,10 +188,7 @@
               </p>
             </div>
 
-            {/* Tarjeta de instrucciones según plataforma */}
             <div className="w-full rounded-lg border gold-border bg-navy-mid/80 shadow-xl ring-1 ring-gold/5 p-5 space-y-4">
-
-              {/* Notificaciones: instrucción común */}
               <div className="flex gap-3 items-start">
                 <span className="text-gold text-lg mt-0.5">🔔</span>
                 <p className="font-crimson text-white/80 text-base leading-snug">
@@ -200,72 +196,26 @@
                 </p>
               </div>
 
-              {/* Android específico */}
               {isAndroid && (
                 <>
                   <div className="h-px bg-gold/15" />
                   <div className="flex gap-3 items-start">
                     <span className="text-gold text-lg mt-0.5">📲</span>
                     <p className="font-crimson text-white/80 text-base leading-snug">
-                      Si alguna vez desinstalás y volvés a instalar la app, <span className="text-gold font-semibold">abrila una vez</span> para que el sistema te vuelva a registrar y seguir recibiendo notificaciones.
+                      Si el sistema no te notifica con la app cerrada, asegúrate de activar los permisos de segundo plano para tu navegador en los ajustes del celular.
                     </p>
                   </div>
                 </>
               )}
-
-              {/* iOS actualizado (16.4+) */}
-              {isIOS && !iosOld && (
-                <>
-                  <div className="h-px bg-gold/15" />
-                  <div className="flex gap-3 items-start">
-                    <span className="text-gold text-lg mt-0.5">⚙️</span>
-                    <div className="font-crimson text-white/80 text-base leading-snug space-y-2">
-                      <p>Para que las notificaciones lleguen con el teléfono bloqueado, verificá en <span className="text-gold font-semibold">Ajustes → Aplicaciones → Safari → Notificaciones</span> que estén activadas.</p>
-                      <p>También asegurate de que esta app <span className="text-gold font-semibold">no esté en modo No Molestar</span> en Ajustes → Focus.</p>
-                    </div>
-                  </div>
-                </>
-              )}
-
-              {/* iOS desactualizado (menor a 16.4) */}
-              {iosOld && (
-                <>
-                  <div className="h-px bg-gold/15" />
-                  <div className="flex gap-3 items-start">
-                    <span className="text-gold text-lg mt-0.5">⚠️</span>
-                    <p className="font-crimson text-amber-300/90 text-base leading-snug">
-                      Tu versión de iOS ({iosVersion}) no soporta notificaciones en apps web. Actualizá a <span className="font-semibold">iOS 16.4 o superior</span> para recibirlas.
-                    </p>
-                  </div>
-                </>
-              )}
-
-              {/* Escritorio / otro */}
-              {!isIOS && !isAndroid && (
-                <>
-                  <div className="h-px bg-gold/15" />
-                  <div className="flex gap-3 items-start">
-                    <span className="text-gold text-lg mt-0.5">💡</span>
-                    <p className="font-crimson text-white/80 text-base leading-snug">
-                      Para la mejor experiencia en móvil, instalá esta app desde Safari (iOS) o Chrome (Android) usando la opción <span className="text-gold font-semibold">Agregar a pantalla de inicio</span>.
-                    </p>
-                  </div>
-                </>
-              )}
-
             </div>
 
-            {/* Botón cerrar */}
             <button
               onClick={onClose}
               className="w-full py-3 rounded font-cinzel text-xs tracking-widest uppercase bg-gradient-to-r from-gold via-gold-light to-gold text-navy font-bold shadow-lg shadow-gold/20"
             >
               Entendido ✦
             </button>
-
-            <p className="font-cinzel text-gold/25 text-xs tracking-[0.2em] uppercase">
-              ✦ A L:. G:. A:. D:. U:. ✦
-            </p>
+            <p className="font-cinzel text-gold/25 text-xs tracking-[0.2em] uppercase">✦ A L:. G:. A:. D:. U:. ✦</p>
           </div>
         </div>
       );
@@ -285,17 +235,13 @@
       'Pasaje al Oriente Eterno': 'bg-slate-800/50  border-slate-500/30',
     };
 
-    // Helpers robustos
     function loadEvents() {
       try {
         const data = localStorage.getItem(STORAGE_KEY);
         if (!data) return [];
         const parsed = JSON.parse(data);
         return Array.isArray(parsed) ? parsed : [];
-      } catch (e) {
-        console.error("Error cargando localStorage:", e);
-        return [];
-      }
+      } catch (e) { return []; }
     }
 
     function saveEvents(l) {
@@ -304,7 +250,7 @@
 
     async function saveEventToFirebase(ev) {
       if (!db) return;
-      try { await db.collection('eventos').doc(String(ev.id)).set(ev); } catch(e) { console.warn(e); }
+      try { await db.collection('eventos').doc(String(ev.id)).set(ev); } catch(e) {}
     }
 
     async function deleteEventFromFirebase(ev) {
@@ -312,21 +258,15 @@
       try {
         const docId = ev.docId || String(ev.id);
         await db.collection('eventos').doc(docId).delete();
-      } catch(e) { console.warn(e); }
+      } catch(e) {}
     }
 
     function formatDate(iso) {
       if (!iso || typeof iso !== 'string') return '';
       const parts = iso.split('-');
       const months = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
-      if (parts.length === 2) {
-        const mIdx = parseInt(parts[0]) - 1;
-        return `${parts[1]} ${months[mIdx] || ''}`;
-      }
-      if (parts.length === 3) {
-        const mIdx = parseInt(parts[1]) - 1;
-        return `${parts[2]} ${months[mIdx] || ''}`;
-      }
+      if (parts.length === 2) return `${parts[1]} ${months[parseInt(parts[0]) - 1] || ''}`;
+      if (parts.length === 3) return `${parts[2]} ${months[parseInt(parts[1]) - 1] || ''}`;
       return iso;
     }
 
@@ -336,30 +276,23 @@
         const today = new Date(); today.setHours(0,0,0,0);
         const parts = iso.split('-');
         let m, d;
-        if (parts.length === 2) { [m, d] = parts; }
-        else if (parts.length === 3) { [, m, d] = parts; }
+        if (parts.length === 2) [m, d] = parts;
+        else if (parts.length === 3) [, m, d] = parts;
         else return 999;
-        
         let next = new Date(today.getFullYear(), parseInt(m) - 1, parseInt(d));
         if (isNaN(next.getTime())) return 999;
         if (next < today) next.setFullYear(next.getFullYear() + 1);
         return Math.round((next - today) / 86400000);
-      } catch (e) {
-        return 999;
-      }
+      } catch (e) { return 999; }
     }
 
-    // Service Worker
     let swRegistration = null;
     async function registerServiceWorker() {
       if (!('serviceWorker' in navigator)) return null;
       try {
         swRegistration = await navigator.serviceWorker.register('./sw.js', { scope: './', updateViaCache: 'none' });
         return swRegistration;
-      } catch (err) {
-        console.warn('[SW] Error:', err);
-        return null;
-      }
+      } catch (err) { return null; }
     }
 
     async function syncEventsToSW(events) {
@@ -368,25 +301,6 @@
         if (!reg || !reg.active) return;
         reg.active.postMessage({ type: 'SCHEDULE_EVENTS', events });
       } catch (err) {}
-    }
-
-    // ── FIX 2: registrar Background Periodic Sync ────────────────────────────
-    // Antes nunca se llamaba a reg.periodicSync.register(), por lo que el
-    // listener 'periodicsync' del SW nunca se activaba en Android Chrome.
-    async function registrarPeriodicSync(reg) {
-      if (!reg || !('periodicSync' in reg)) return;
-      try {
-        const tags = await reg.periodicSync.getTags();
-        if (!tags.includes('of-daily-check')) {
-          await reg.periodicSync.register('of-daily-check', {
-            minInterval: 20 * 60 * 60 * 1000  // 20 horas (margen ante el delay de Chrome)
-          });
-          console.log('[SW] Periodic sync registrado');
-        }
-      } catch (e) {
-        // periodicSync puede requerir "frecuent usage" en Chrome; no es fatal
-        console.warn('[SW] Periodic sync no disponible:', e.message);
-      }
     }
 
     function Icon({ name, size = 18, className = '' }) {
@@ -442,32 +356,19 @@
       const [notifPerm, setNotifPerm] = useState(() => typeof Notification !== 'undefined' ? Notification.permission : 'denied');
       const [toast, setToast]         = useState({ msg:'', visible:false });
       const [loading, setLoading]     = useState(true);
-      // Pantalla de bienvenida: visible siempre al iniciar (se cierra con el botón).
-      // No usa localStorage → vuelve a aparecer cada vez que se instala/reinstala.
       const [showWelcome, setShowWelcome] = useState(true);
       const toastTimer = useRef(null);
 
-      // ── FIX 3: inicialización con periodic sync y re-registro de token ──────
-      // Antes: solo registraba el token si el permiso ya estaba concedido.
-      // Ahora: además registra el periodic sync para Android Chrome, y re-registra
-      // el token FCM en cada apertura (garantizando que Firestore siempre lo tenga).
       useEffect(() => {
         registerServiceWorker().then(async reg => {
           if (reg && Notification.permission === 'granted') {
-            // Re-registrar token en cada apertura (Fix 1 lo hace idempotente y seguro)
             if (window._registrarTokenFCM) await window._registrarTokenFCM();
-            // Registrar periodic sync para Android Chrome (Fix 2)
-            await registrarPeriodicSync(reg);
           }
         });
       }, []);
 
-      // Firebase Listener
       useEffect(() => {
-        if (!db) {
-          setLoading(false);
-          return;
-        }
+        if (!db) { setLoading(false); return; }
         const unsub = db.collection('eventos').onSnapshot(
           snap => {
             const fbEvents = snap.docs.map(d => ({ docId: d.id, ...d.data() }));
@@ -476,10 +377,7 @@
             setLoading(false);
             if (Notification.permission === 'granted') syncEventsToSW(fbEvents);
           },
-          err => {
-            console.warn('Firebase error:', err);
-            setLoading(false);
-          }
+          err => { setLoading(false); }
         );
         return () => unsub();
       }, []);
@@ -490,7 +388,6 @@
         toastTimer.current = setTimeout(() => setToast(t => ({ ...t, visible: false })), 2800);
       }, []);
 
-      // Cálculo seguro de eventos ordenados
       const sorted = useMemo(() => {
         if (!events || !Array.isArray(events)) return [];
         return [...events].sort((a,b) => daysUntil(a.fecha) - daysUntil(b.fecha));
@@ -513,22 +410,18 @@
         showToast('Evento eliminado');
       }
 
-      // ── FIX 4: handleNotify también registra el periodic sync ────────────────
-      // Cuando el usuario activa las notificaciones por primera vez, ahora también
-      // se registra el periodic sync, no solo el token FCM.
       async function handleNotify() {
         if (!('Notification' in window)) { showToast('Navegador no soportado'); return; }
-        const perm = await Notification.requestPermission();
-        setNotifPerm(perm);
-        if (perm === 'granted') {
+        showToast('Registrando dispositivo...');
+        
+        const exito = await window._registrarTokenFCM();
+        setNotifPerm(Notification.permission);
+        
+        if (exito) {
           await syncEventsToSW(events);
-          if (window._registrarTokenFCM) await window._registrarTokenFCM();
-          // Registrar periodic sync al activar notificaciones
-          const reg = swRegistration || await registerServiceWorker();
-          if (reg) await registrarPeriodicSync(reg);
           showToast('Notificaciones activadas ✦');
         } else {
-          showToast('Permiso denegado');
+          showToast('Error al activar. Intenta de nuevo.');
         }
       }
 
@@ -586,12 +479,8 @@
                   <select value={dia} onChange={e => setDia(e.target.value)} className="w-28 bg-navy/70 border gold-border rounded px-3 py-2.5 text-white font-crimson text-base focus:outline-none">
                     <option value="">— Día —</option>
                     {(() => {
-                      // Días válidos según el mes seleccionado.
-                      // Febrero: máximo 29 (incluye el 29/Feb para aniversarios de
-                      // bisiestos; el workflow lo entrega el 28/Feb en años no bisiestos).
                       const diasPorMes = [31,29,31,30,31,30,31,31,30,31,30,31];
                       const maxDias = mes ? diasPorMes[parseInt(mes,10) - 1] : 31;
-                      // Si el día seleccionado ya no es válido para el nuevo mes, resetear
                       if (dia && parseInt(dia,10) > maxDias) { setTimeout(() => setDia(''), 0); }
                       return Array.from({length: maxDias}, (_,i) => i+1).map(d => (
                         <option key={d} value={String(d).padStart(2,'0')}>{d}</option>
