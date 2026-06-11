@@ -1,4 +1,4 @@
-// Oriente Fraterno 148 - Service Worker v14
+// Oriente Fraterno 148 - Service Worker v14 (Corregido)
 // Maneja notificaciones FCM en background y lógica local de respaldo
 
 importScripts('https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js');
@@ -34,29 +34,19 @@ firebase.initializeApp({
 const messaging = firebase.messaging();
 
 // ── Handler de notificaciones en background ───────────────────────────────────
-//
-// El workflow envía webpush.notification en el payload (además de data).
-// Esto garantiza:
-//   - iOS PWA (16.4+): FCM/WebKit muestra la notificación AUTOMÁTICAMENTE sin
-//     pasar por este handler, ya que WebKit procesa webpush.notification directo.
-//   - Android/Chrome: FCM muestra la notif automáticamente desde webpush.notification
-//     Y llama a onBackgroundMessage.
-//
-// Por eso este handler NO llama a showNotification() — ya fue mostrada por FCM.
-// Solo ejecuta markFcmFiredToday() para que checkAndNotify() no duplique
-// la notificación si el usuario abre la app más tarde ese mismo día.
-//
 messaging.onBackgroundMessage(payload => {
-  const titulo = (payload.data && payload.data.title)
+  const dataPayload = (payload.notification && payload.notification.data) || payload.data || {};
+
+  const titulo = dataPayload.title
               || (payload.notification && payload.notification.title)
               || 'Oriente Fraterno 148';
-  const cuerpo  = (payload.data && payload.data.body)
+  const cuerpo  = dataPayload.body
               || (payload.notification && payload.notification.body)
               || 'Hoy hay un evento';
 
   console.log('[SW-FCM] Mensaje background recibido:', titulo, cuerpo);
 
-  // La notificación ya fue mostrada automáticamente por FCM (webpush.notification).
+  // La notificación ya fue mostrada automáticamente por el OS gracias a webpush.notification.
   // Solo marcar en fired[] para evitar duplicado desde checkAndNotify().
   return markFcmFiredToday();
 });
@@ -90,6 +80,7 @@ async function markFcmFiredToday() {
 }
 
 // ── IndexedDB helpers ─────────────────────────────────────────────────────────
+// (Se mantienen idénticos sin cambios)
 function openDB() {
   return new Promise((res, rej) => {
     const req = indexedDB.open(DB_NAME, DB_VERSION);
@@ -123,11 +114,9 @@ async function dbSet(key, value) {
 // ── Lifecycle ─────────────────────────────────────────────────────────────────
 self.addEventListener('install', e => {
   console.log('[SW]', SW_VERSION);
-  // Pre-cachear recursos de la app para funcionamiento offline
   e.waitUntil(
     caches.open(CACHE_NAME).then(cache => {
       return cache.addAll(PRECACHE_URLS).catch(err => {
-        // No bloquear instalación si falla algún recurso (ej: sin red)
         console.warn('[SW] Pre-cache parcial:', err);
       });
     }).then(() => self.skipWaiting())
@@ -135,7 +124,6 @@ self.addEventListener('install', e => {
 });
 
 self.addEventListener('activate', e => {
-  // Limpiar cachés antiguas al activar nueva versión del SW
   e.waitUntil(
     caches.keys().then(keys =>
       Promise.all(
@@ -179,24 +167,19 @@ self.addEventListener('sync', e => {
 // ── Fetch: estrategia Cache-First para recursos propios, Network-First para el resto ──
 self.addEventListener('fetch', e => {
   const url = e.request.url;
-
-  // Solo interceptar GETs
   if (e.request.method !== 'GET') return;
 
-  // Recursos propios de la app (mismo origen GitHub Pages): Cache-First
   if (url.startsWith(APP_BASE)) {
     e.respondWith(
       caches.match(e.request).then(cached => {
         if (cached) return cached;
         return fetch(e.request).then(response => {
-          // Cachear respuestas válidas
           if (response && response.status === 200) {
             const clone = response.clone();
             caches.open(CACHE_NAME).then(cache => cache.put(e.request, clone));
           }
           return response;
         }).catch(() => {
-          // Sin red y sin caché: devolver página principal si existe
           return caches.match('https://caristim.github.io/oriente-fraterno/index.html')
             || new Response('Sin conexión', { status: 503 });
         });
@@ -205,7 +188,6 @@ self.addEventListener('fetch', e => {
     return;
   }
 
-  // Recursos externos (Firebase, CDNs): Network-First con fallback a caché
   e.respondWith(
     fetch(e.request).catch(() =>
       caches.match(e.request).then(cached =>
@@ -229,10 +211,6 @@ self.addEventListener('notificationclick', e => {
 });
 
 // ── Notificación local de respaldo ────────────────────────────────────────────
-// Se dispara cuando:
-//   a) El periodic sync despierta el SW (Android Chrome, con la app cerrada)
-//   b) El usuario abre la app y hay un evento hoy que FCM no entregó
-// El sistema fired[] evita duplicados con las notificaciones FCM.
 async function checkAndNotify() {
   try {
     const events = await dbGet('events');
@@ -256,8 +234,7 @@ async function checkAndNotify() {
       const fireKey = `${evId}-${now.getFullYear()}`;
       if (fired[fireKey]) continue;
       if (self.Notification && Notification.permission !== 'granted') continue;
-      // FIX: URLs absolutas para icon y badge (relativas fallan cuando el SW
-      // está en scope raíz o la app está cerrada)
+
       await self.registration.showNotification('Oriente Fraterno 148', {
         body:               `Hoy: ${ev.tipo} de ${ev.nombre}`,
         tag:                `of-local-${evId}`,
