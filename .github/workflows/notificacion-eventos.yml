@@ -110,13 +110,22 @@ jobs:
 
           function fcmSend(projectId, accessToken, token, titulo, cuerpo) {
             return new Promise((resolve, reject) => {
+              // CORRECCIÓN PRINCIPAL:
+              // Se envía el contenido en AMBOS campos:
+              //   - "webpush.notification": para que el SO pueda mostrar la notificación
+              //     directamente sin despertar el SW (comportamiento estándar en Android).
+              //   - "webpush.data": para que el SW pueda leer título y cuerpo en
+              //     onBackgroundMessage() y mostrar la notificación él mismo si el SO
+              //     no lo hizo (necesario en algunos dispositivos y en iOS 16.4+).
+              // Ambos campos juntos garantizan la entrega en la mayor cantidad de
+              // combinaciones de navegador/SO posibles.
               const body = JSON.stringify({
                 message: {
                   token: token,
                   webpush: {
                     headers: {
-                      "Urgency": "high",
-                      "TTL": "86400"
+                      'Urgency': 'high',
+                      'TTL': '86400'
                     },
                     notification: {
                       title: titulo,
@@ -124,22 +133,29 @@ jobs:
                       icon:  'https://caristim.github.io/oriente-fraterno/icon-192.png',
                       badge: 'https://caristim.github.io/oriente-fraterno/icon-192.png',
                       requireInteraction: true,
-                      vibrate: [200, 100, 200, 100, 200],
-                      data: {
-                        url: 'https://caristim.github.io/oriente-fraterno/',
-                        title: titulo,
-                        body: cuerpo
-                      }
+                      vibrate: [200, 100, 200, 100, 200]
                     },
-                    fcm_options: { link: 'https://caristim.github.io/oriente-fraterno/' }
+                    data: {
+                      title: titulo,
+                      body:  cuerpo,
+                      url:   'https://caristim.github.io/oriente-fraterno/',
+                      tag:   'fcm-' + Date.now()
+                    },
+                    fcm_options: {
+                      link: 'https://caristim.github.io/oriente-fraterno/'
+                    }
                   }
                 }
               });
+
               const req = https.request({
                 hostname: 'fcm.googleapis.com',
                 path:     '/v1/projects/' + projectId + '/messages:send',
                 method:   'POST',
-                headers:  { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + accessToken }
+                headers:  {
+                  'Content-Type':  'application/json',
+                  'Authorization': 'Bearer ' + accessToken
+                }
               }, (res) => {
                 let r = '';
                 res.on('data', c => r += c);
@@ -148,12 +164,12 @@ jobs:
                   try { parsed = JSON.parse(r); } catch(_) {}
 
                   if (parsed.error) {
-                    const details = parsed.error.details || [];
-                    const fcmError = details.find(d => d.errorCode);
+                    const details   = parsed.error.details || [];
+                    const fcmError  = details.find(d => d.errorCode);
                     const errorCode = fcmError ? fcmError.errorCode : parsed.error.status;
-                    const isInvalidToken = ['UNREGISTERED', 'INVALID_ARGUMENT'].includes(errorCode);
+                    const isInvalid = ['UNREGISTERED', 'INVALID_ARGUMENT'].includes(errorCode);
                     console.log('FCM error [' + errorCode + '] token: ' + token.substring(0, 20) + '...');
-                    resolve({ invalid: isInvalidToken });
+                    resolve({ invalid: isInvalid });
                   } else {
                     console.log('FCM OK: ' + token.substring(0, 20) + '...');
                     resolve({ invalid: false });
@@ -194,8 +210,11 @@ jobs:
               };
             }).filter(e => e.fecha === fechaHoy);
 
-            if (eventos.length === 0) { console.log('Hoy no hay eventos.'); return; }
-            console.log('Eventos hoy: ' + eventos.map(e => e.nombre).join(', '));
+            if (eventos.length === 0) {
+              console.log('Hoy no hay eventos. No se envían notificaciones.');
+              return;
+            }
+            console.log('Eventos hoy: ' + eventos.map(e => e.nombre + ' (' + e.tipo + ')').join(', '));
 
             const tokensData = await firestoreGetAll(projectId, accessToken, 'fcm_tokens');
             if (tokensData.error) {
@@ -207,14 +226,17 @@ jobs:
               docName: doc.name
             })).filter(d => d.token.length > 0);
 
-            if (tokenDocs.length === 0) { console.log('No hay tokens FCM registrados.'); return; }
+            if (tokenDocs.length === 0) {
+              console.log('No hay tokens FCM registrados. Nadie recibirá notificación.');
+              return;
+            }
             console.log('Tokens registrados: ' + tokenDocs.length);
 
             const tokenesInvalidos = new Set();
 
             for (const ev of eventos) {
               const msg = 'Hoy: ' + ev.tipo + ' de ' + ev.nombre;
-              console.log('Enviando: ' + msg);
+              console.log('Enviando: "' + msg + '" a ' + tokenDocs.length + ' dispositivo(s)...');
               for (const td of tokenDocs) {
                 const result = await fcmSend(projectId, accessToken, td.token, 'Oriente Fraterno 148', msg);
                 if (result.invalid) {
@@ -233,5 +255,5 @@ jobs:
             console.log('Proceso completado.');
           }
 
-          main().catch(e => { console.error('Error: ' + e.message); process.exit(1); });
+          main().catch(e => { console.error('Error fatal: ' + e.message); process.exit(1); });
           EOF
