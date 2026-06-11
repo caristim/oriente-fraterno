@@ -108,46 +108,15 @@ jobs:
             });
           }
 
-          // CORRECCIÓN: se agrega webpush.notification al payload.
-          //
-          // Por qué es necesario para iOS:
-          //   Los tokens FCM generados por el browser (getToken() en la PWA) son tokens
-          //   web push, no tokens APNS nativos. Para estos tokens, FCM usa el protocolo
-          //   Web Push (RFC 8030) y solo procesa el bloque "webpush" del payload.
-          //   El bloque "apns" es ignorado completamente para tokens web.
-          //
-          //   En iOS Safari PWA (16.4+), Apple implementó Web Push con su propio stack
-          //   WebKit. Cuando el payload incluye webpush.notification, FCM entrega la
-          //   notificación a través del protocolo Web Push estándar y WebKit la muestra
-          //   directamente, SIN necesitar que el firebase-messaging-compat SW se ejecute.
-          //   Esto es lo que garantiza que llegue la notificación con la app cerrada en iOS.
-          //
-          // Por qué no causa duplicados en Android:
-          //   El SW (onBackgroundMessage) detecta el campo notification en el payload
-          //   y NO llama a showNotification() — solo ejecuta markFcmFiredToday().
-          //   La notificación la muestra FCM/Chrome automáticamente desde webpush.notification.
-          //
-          // El bloque "apns" del payload original fue eliminado porque era ignorado
-          // para tokens web push (solo aplica a tokens del SDK nativo Swift/ObjC).
-          //
           function fcmSend(projectId, accessToken, token, titulo, cuerpo) {
             return new Promise((resolve, reject) => {
               const body = JSON.stringify({
                 message: {
-                  token,
-                  // Campo data: leído por onBackgroundMessage en el SW para markFcmFiredToday
-                  data: {
-                    title: titulo,
-                    body:  cuerpo,
-                  },
-                  android: {
-                    priority: 'high'
-                  },
-                  // webpush.notification: garantiza la entrega en iOS PWA y Chrome/Android
-                  // sin depender de que el SW ejecute showNotification().
+                  token: token,
                   webpush: {
                     headers: {
-                      Urgency: 'high'
+                      "Urgency": "high",
+                      "TTL": "86400"
                     },
                     notification: {
                       title: titulo,
@@ -157,7 +126,9 @@ jobs:
                       requireInteraction: true,
                       vibrate: [200, 100, 200, 100, 200],
                       data: {
-                        url: 'https://caristim.github.io/oriente-fraterno/'
+                        url: 'https://caristim.github.io/oriente-fraterno/',
+                        title: titulo,
+                        body: cuerpo
                       }
                     },
                     fcm_options: { link: 'https://caristim.github.io/oriente-fraterno/' }
@@ -197,7 +168,6 @@ jobs:
 
           async function main() {
             const ahora     = new Date();
-            // Uruguay: UTC-3 todo el año (sin horario de verano desde 2015)
             const localTime = new Date(ahora.getTime() + (-3 * 60 * 60000));
             const dia       = String(localTime.getUTCDate()).padStart(2,'0');
             const mes       = String(localTime.getUTCMonth() + 1).padStart(2,'0');
@@ -210,7 +180,6 @@ jobs:
             const accessToken = await getGoogleToken(sa);
             console.log('Token Google OK');
 
-            // 1. Eventos de hoy
             const eventosData = await firestoreGetAll(projectId, accessToken, 'eventos');
             if (eventosData.error) {
               console.error('Error leyendo eventos:', JSON.stringify(eventosData.error));
@@ -228,7 +197,6 @@ jobs:
             if (eventos.length === 0) { console.log('Hoy no hay eventos.'); return; }
             console.log('Eventos hoy: ' + eventos.map(e => e.nombre).join(', '));
 
-            // 2. Tokens FCM
             const tokensData = await firestoreGetAll(projectId, accessToken, 'fcm_tokens');
             if (tokensData.error) {
               console.error('Error leyendo tokens:', JSON.stringify(tokensData.error));
@@ -242,7 +210,6 @@ jobs:
             if (tokenDocs.length === 0) { console.log('No hay tokens FCM registrados.'); return; }
             console.log('Tokens registrados: ' + tokenDocs.length);
 
-            // 3. Enviar notificaciones
             const tokenesInvalidos = new Set();
 
             for (const ev of eventos) {
@@ -256,7 +223,6 @@ jobs:
               }
             }
 
-            // 4. Limpiar tokens inválidos
             if (tokenesInvalidos.size > 0) {
               console.log('Limpiando ' + tokenesInvalidos.size + ' token(s) invalido(s)...');
               for (const docName of tokenesInvalidos) {
