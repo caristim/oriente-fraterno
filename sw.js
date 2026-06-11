@@ -31,31 +31,29 @@ firebase.initializeApp({
 
 const messaging = firebase.messaging();
 
-// ── Handler principal: notificaciones FCM en background ───────────────────────
-// Este handler se dispara cuando llega un mensaje FCM con la app CERRADA o en background.
-// IMPORTANTE: cuando el payload tiene "notification" con título+body, Chrome/Android
-// lo muestra automáticamente. Este handler se usa como respaldo explícito para
-// garantizar que la notificación siempre se muestre, independientemente del
-// comportamiento del SO.
+// ── Handler de notificaciones FCM en background ───────────────────────────────
+//
+// DISEÑO IMPORTANTE:
+// El YAML envía el mensaje con SOLO el campo "webpush.data" (sin "webpush.notification").
+// Cuando no hay "notification" en el payload, el SO NO muestra nada automáticamente
+// y Firebase llama a onBackgroundMessage para que el SW decida qué mostrar.
+// Así evitamos el bug de notificación duplicada y tenemos control total.
+//
+// Si el YAML enviara "webpush.notification" Y el SW también llama a showNotification(),
+// el usuario vería DOS notificaciones. Por eso el YAML solo envía "data".
+//
 messaging.onBackgroundMessage(async (payload) => {
   console.log('[SW-FCM] Mensaje recibido en background:', JSON.stringify(payload));
 
-  // Extraer título y cuerpo de donde vengan (data o notification)
-  const data       = payload.data        || {};
-  const notif      = payload.notification || {};
-
-  const titulo = data.title || notif.title || 'Oriente Fraterno 148';
-  const cuerpo = data.body  || notif.body  || 'Hoy hay un evento';
+  // Los datos vienen en payload.data (lo que el YAML pone en webpush.data)
+  const data   = payload.data || {};
+  const titulo = data.title || 'Oriente Fraterno 148';
+  const cuerpo = data.body  || 'Hoy hay un evento';
   const url    = data.url   || APP_BASE;
 
-  // Cerrar cualquier notificación previa con el mismo tag para evitar duplicados
-  const tag = 'of-fcm-' + (data.tag || Date.now());
-
-  // Mostrar la notificación explícitamente desde el SW.
-  // Esto garantiza que aparezca incluso si el SO no la mostró automáticamente.
   await self.registration.showNotification(titulo, {
     body:               cuerpo,
-    tag:                tag,
+    tag:                'of-fcm-' + (data.tag || Date.now()),
     icon:               ICON_192,
     badge:              BADGE_URL,
     requireInteraction: true,
@@ -63,7 +61,7 @@ messaging.onBackgroundMessage(async (payload) => {
     data:               { url },
   });
 
-  console.log('[SW-FCM] Notificación mostrada:', titulo, cuerpo);
+  console.log('[SW-FCM] Notificación mostrada:', titulo, '-', cuerpo);
 });
 
 // ── IndexedDB helpers ─────────────────────────────────────────────────────────
@@ -196,8 +194,7 @@ self.addEventListener('notificationclick', e => {
   );
 });
 
-// ── Notificación local de respaldo (para cuando FCM no llega) ─────────────────
-// Se ejecuta cuando la app envía SCHEDULE_EVENTS o cuando el SW despierta.
+// ── Notificación local de respaldo (cuando FCM no llega) ─────────────────────
 async function checkAndNotify() {
   try {
     const events = await dbGet('events');
