@@ -110,15 +110,19 @@ jobs:
 
           function fcmSend(projectId, accessToken, token, titulo, cuerpo) {
             return new Promise((resolve, reject) => {
-              // CORRECCIÓN PRINCIPAL:
-              // Se envía el contenido en AMBOS campos:
-              //   - "webpush.notification": para que el SO pueda mostrar la notificación
-              //     directamente sin despertar el SW (comportamiento estándar en Android).
-              //   - "webpush.data": para que el SW pueda leer título y cuerpo en
-              //     onBackgroundMessage() y mostrar la notificación él mismo si el SO
-              //     no lo hizo (necesario en algunos dispositivos y en iOS 16.4+).
-              // Ambos campos juntos garantizan la entrega en la mayor cantidad de
-              // combinaciones de navegador/SO posibles.
+              //
+              // DISEÑO CLAVE: se envía SOLO "webpush.data", sin "webpush.notification".
+              //
+              // ¿Por qué? Cuando el payload incluye "webpush.notification", el SO
+              // (Android/Chrome) muestra la notificación automáticamente Y además
+              // Firebase llama a onBackgroundMessage, con lo que el SW la mostraría
+              // una segunda vez → el usuario vería DOS notificaciones.
+              //
+              // Al enviar solo "data", el SO no muestra nada por su cuenta y Firebase
+              // invoca onBackgroundMessage, donde el SW muestra UNA notificación con
+              // control total del contenido. Este es el patrón correcto según la
+              // documentación de Firebase y los issues oficiales del SDK.
+              //
               const body = JSON.stringify({
                 message: {
                   token: token,
@@ -127,19 +131,11 @@ jobs:
                       'Urgency': 'high',
                       'TTL': '86400'
                     },
-                    notification: {
-                      title: titulo,
-                      body:  cuerpo,
-                      icon:  'https://caristim.github.io/oriente-fraterno/icon-192.png',
-                      badge: 'https://caristim.github.io/oriente-fraterno/icon-192.png',
-                      requireInteraction: true,
-                      vibrate: [200, 100, 200, 100, 200]
-                    },
                     data: {
                       title: titulo,
                       body:  cuerpo,
                       url:   'https://caristim.github.io/oriente-fraterno/',
-                      tag:   'fcm-' + Date.now()
+                      tag:   'of-' + Date.now()
                     },
                     fcm_options: {
                       link: 'https://caristim.github.io/oriente-fraterno/'
@@ -211,7 +207,7 @@ jobs:
             }).filter(e => e.fecha === fechaHoy);
 
             if (eventos.length === 0) {
-              console.log('Hoy no hay eventos. No se envían notificaciones.');
+              console.log('Hoy no hay eventos. No se envian notificaciones.');
               return;
             }
             console.log('Eventos hoy: ' + eventos.map(e => e.nombre + ' (' + e.tipo + ')').join(', '));
@@ -227,7 +223,7 @@ jobs:
             })).filter(d => d.token.length > 0);
 
             if (tokenDocs.length === 0) {
-              console.log('No hay tokens FCM registrados. Nadie recibirá notificación.');
+              console.log('No hay tokens FCM registrados. Nadie recibira notificacion.');
               return;
             }
             console.log('Tokens registrados: ' + tokenDocs.length);
