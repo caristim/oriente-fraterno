@@ -25,12 +25,33 @@ jobs:
           const crypto  = require('crypto');
           const webpush = require('web-push');
 
+          // ── Validación de Secretos ─────────────────────────────────────────
+          const requiredEnv = [
+            'FIREBASE_PROJECT_ID', 
+            'FIREBASE_SERVICE_ACCOUNT', 
+            'VAPID_PUBLIC_KEY', 
+            'VAPID_PRIVATE_KEY'
+          ];
+          
+          const missing = requiredEnv.filter(k => !process.env[k]);
+          if (missing.length > 0) {
+            console.error('❌ Faltan los siguientes Secretos en GitHub:');
+            missing.forEach(m => console.error(`   - OF_${m}`));
+            console.error('\nPor favor, ve a Settings -> Secrets and variables -> Actions y agrégalos.');
+            process.exit(1);
+          }
+
           // ── Configurar VAPID para Web Push nativo (iOS) ────────────────────
-          webpush.setVapidDetails(
-            process.env.VAPID_SUBJECT || 'mailto:admin@example.com',
-            process.env.VAPID_PUBLIC_KEY,
-            process.env.VAPID_PRIVATE_KEY
-          );
+          try {
+            webpush.setVapidDetails(
+              process.env.VAPID_SUBJECT || 'mailto:admin@example.com',
+              process.env.VAPID_PUBLIC_KEY,
+              process.env.VAPID_PRIVATE_KEY
+            );
+          } catch (err) {
+            console.error('❌ Error al configurar VAPID:', err.message);
+            process.exit(1);
+          }
 
           // ── Helpers JWT para Google OAuth2 ─────────────────────────────────
           function base64url(str) {
@@ -124,35 +145,21 @@ jobs:
           }
 
           // ── Envío FCM: DATA-ONLY payload ────────────────────────────────────
-          //
-          // ¡¡CRÍTICO!! Se usa SOLO el campo "data:{}" sin "notification:{}".
-          //
-          // Motivo: cuando el payload incluye "notification:{}", el SDK de
-          // Firebase en el SW muestra la notificación de forma automática y
-          // silencia onBackgroundMessage() en muchos dispositivos Android,
-          // haciendo que la notificación nunca aparezca con la app cerrada.
-          //
-          // Con data-only, onBackgroundMessage() siempre se dispara y el SW
-          // muestra la notificación explícitamente → fiabilidad garantizada.
-          //
           function fcmSend(projectId, accessToken, token, titulo, cuerpo, tag) {
             return new Promise((resolve, reject) => {
               const body = JSON.stringify({
                 message: {
                   token: token,
-                  // ── SIN campo "notification" aquí ── eso es intencional ──
                   data: {
                     title: titulo,
                     body:  cuerpo,
                     url:   'https://caristim.github.io/oriente-fraterno/index.html',
                     tag:   tag
                   },
-                  // Prioridad alta para Android Doze mode
                   android: {
                     priority: 'high',
                     ttl:      '86400s'
                   },
-                  // Webpush: solo TTL y urgency, sin notification
                   webpush: {
                     headers: {
                       'Urgency': 'high',
@@ -211,7 +218,6 @@ jobs:
               console.log('  WebPush OK: ' + subscription.endpoint.substring(0, 50) + '...');
               return { invalid: false };
             } catch (err) {
-              // 404 / 410 = suscripción expirada o cancelada
               const invalid = err.statusCode === 404 || err.statusCode === 410;
               console.log('  WebPush error [' + (err.statusCode || err.message) + ']: '
                 + subscription.endpoint.substring(0, 50) + '...');
@@ -221,12 +227,11 @@ jobs:
 
           // ── MAIN ────────────────────────────────────────────────────────────
           async function main() {
-            // Calcular fecha en Uruguay (UTC-3, sin DST desde 2015)
             const ahora     = new Date();
             const localTime = new Date(ahora.getTime() - (3 * 60 * 60 * 1000));
             const dia       = String(localTime.getUTCDate()).padStart(2, '0');
             const mes       = String(localTime.getUTCMonth() + 1).padStart(2, '0');
-            const fechaHoy  = mes + '-' + dia;   // MM-DD (igual que en Firestore)
+            const fechaHoy  = mes + '-' + dia;
             const projectId = process.env.FIREBASE_PROJECT_ID;
 
             console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
@@ -235,12 +240,17 @@ jobs:
             console.log('Fecha Uruguay:', fechaHoy, '(hora local:', localTime.getUTCHours() + ':00)');
             console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
 
-            // Obtener token OAuth2
-            const sa          = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+            let sa;
+            try {
+              sa = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
+            } catch (e) {
+              console.error('❌ Error: OF_FIREBASE_SERVICE_ACCOUNT no es un JSON válido.');
+              process.exit(1);
+            }
+
             const accessToken = await getGoogleToken(sa);
             console.log('Token Google OAuth2: OK');
 
-            // ── Leer eventos de Firestore ────────────────────────────────────
             console.log('\n[1/4] Leyendo eventos de Firestore...');
             const eventosData = await firestoreGetAll(projectId, accessToken, 'eventos');
             if (eventosData.error) {
@@ -265,7 +275,6 @@ jobs:
             }
             console.log('  Eventos para hoy:', eventos.map(e => e.nombre + ' (' + e.tipo + ')').join(', '));
 
-            // ── Leer tokens FCM ──────────────────────────────────────────────
             console.log('\n[2/4] Leyendo tokens FCM (Android/Chrome)...');
             const fcmData = await firestoreGetAll(projectId, accessToken, 'fcm_tokens');
             const fcmDocs = fcmData.error ? [] : (fcmData.documents || []).map(doc => ({
@@ -274,7 +283,6 @@ jobs:
             })).filter(d => d.token.length > 10);
             console.log('  Tokens FCM registrados:', fcmDocs.length);
 
-            // ── Leer suscripciones Web Push nativas ─────────────────────────
             console.log('\n[3/4] Leyendo suscripciones Web Push (iOS/otros)...');
             const wpData = await firestoreGetAll(projectId, accessToken, 'webpush_subscriptions');
             const wpDocs = (!wpData || wpData.error) ? [] : (wpData.documents || []).map(doc => {
@@ -290,12 +298,10 @@ jobs:
             console.log('  Suscripciones Web Push:', wpDocs.length);
 
             if (fcmDocs.length === 0 && wpDocs.length === 0) {
-              console.log('\n⚠️  No hay dispositivos registrados. Nadie recibirá notificación.');
-              console.log('  Asegúrate de que los usuarios hayan pulsado "Activar Notificaciones".');
+              console.log('\n⚠️ No hay dispositivos registrados.');
               return;
             }
 
-            // ── Enviar notificaciones ────────────────────────────────────────
             console.log('\n[4/4] Enviando notificaciones...');
             const fcmInvalidos = new Set();
             const wpInvalidos  = new Set();
@@ -305,20 +311,14 @@ jobs:
               const cuerpo = 'Hoy: ' + ev.tipo + ' de ' + ev.nombre;
               const tag    = 'of-ev-' + ev.nombre.replace(/\s+/g, '-').toLowerCase().substring(0, 30) + '-' + fechaHoy;
 
-              console.log('\n  ✦ Evento: ' + cuerpo);
-
-              // FCM (Android/Chrome) — payload data-only
               if (fcmDocs.length > 0) {
-                console.log('  FCM → ' + fcmDocs.length + ' dispositivo(s):');
                 for (const td of fcmDocs) {
                   const r = await fcmSend(projectId, accessToken, td.token, titulo, cuerpo, tag);
                   if (r.invalid) fcmInvalidos.add(td.docName);
                 }
               }
 
-              // Web Push nativo (iOS/Safari/Firefox)
               if (wpDocs.length > 0) {
-                console.log('  WebPush → ' + wpDocs.length + ' dispositivo(s):');
                 for (const sub of wpDocs) {
                   const subscription = {
                     endpoint: sub.endpoint,
@@ -330,28 +330,20 @@ jobs:
               }
             }
 
-            // ── Limpiar tokens inválidos ─────────────────────────────────────
             if (fcmInvalidos.size > 0) {
-              console.log('\nLimpiando ' + fcmInvalidos.size + ' token(s) FCM inválido(s)...');
               for (const dn of fcmInvalidos) await firestoreDelete(accessToken, dn);
             }
             if (wpInvalidos.size > 0) {
-              console.log('\nLimpiando ' + wpInvalidos.size + ' suscripción(es) Web Push inválida(s)...');
               for (const dn of wpInvalidos) await firestoreDelete(accessToken, dn);
             }
 
-            // ── Resumen final ────────────────────────────────────────────────
             console.log('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-            console.log('Proceso completado exitosamente.');
-            console.log('  FCM enviados:     ' + (fcmDocs.length - fcmInvalidos.size) + ' / ' + fcmDocs.length);
-            console.log('  WebPush enviados: ' + (wpDocs.length - wpInvalidos.size)  + ' / ' + wpDocs.length);
-            console.log('  Tokens inválidos eliminados: FCM=' + fcmInvalidos.size + ', WP=' + wpInvalidos.size);
+            console.log('Proceso completado.');
             console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
           }
 
           main().catch(e => {
             console.error('\n❌ Error fatal:', e.message);
-            console.error(e.stack);
             process.exit(1);
           });
           EOF
