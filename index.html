@@ -170,49 +170,83 @@
 
     function WelcomeScreen({ onClose }) {
       const { isIOS, isAndroid } = detectPlatform();
-      const iosVersion = isIOS ? getIOSVersion() : null;
-      const iosOld = isIOS && iosVersion !== null && iosVersion < 16.4;
+      const [step, setStep] = useState(1);
+
+      const nextStep = () => setStep(s => s + 1);
 
       return (
-        <div className="fixed inset-0 z-50 bg-navy flex flex-col items-center justify-center px-6 bg-grid">
-          <div className="w-full max-w-sm flex flex-col items-center gap-6">
+        <div className="fixed inset-0 z-50 bg-navy flex flex-col items-center justify-center px-6 bg-grid overflow-y-auto">
+          <div className="w-full max-w-sm flex flex-col items-center gap-6 py-8">
             <div className="text-center mb-2">
               <div className="text-gold text-5xl mb-3">✦</div>
               <h1 className="font-cinzel text-gold-light tracking-widest uppercase text-base font-bold leading-tight">
                 Oriente Fraterno · 148
               </h1>
               <p className="font-cinzel text-gold/50 tracking-widest uppercase text-xs mt-1">
-                Bienvenido
+                Configuración de Notificaciones
               </p>
             </div>
 
-            <div className="w-full rounded-lg border gold-border bg-navy-mid/80 shadow-xl ring-1 ring-gold/5 p-5 space-y-4">
-              <div className="flex gap-3 items-start">
-                <span className="text-gold text-lg mt-0.5">🔔</span>
-                <p className="font-crimson text-white/80 text-base leading-snug">
-                  Para recibir avisos el día de cada evento, toca <span className="text-gold font-semibold">Activar Notificaciones Web</span> en la pantalla principal.
-                </p>
-              </div>
-
-              {isAndroid && (
-                <>
-                  <div className="h-px bg-gold/15" />
+            <div className="w-full rounded-lg border gold-border bg-navy-mid/80 shadow-xl ring-1 ring-gold/5 p-5 space-y-6">
+              {step === 1 && (
+                <div className="fade-in space-y-4">
                   <div className="flex gap-3 items-start">
-                    <span className="text-gold text-lg mt-0.5">📲</span>
-                    <p className="font-crimson text-white/80 text-base leading-snug">
-                      Si el sistema no te notifica con la app cerrada, asegúrate de activar los permisos de segundo plano para tu navegador en los ajustes del celular.
+                    <span className="bg-gold/20 text-gold w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold shrink-0 mt-0.5">1</span>
+                    <p className="font-crimson text-white/90 text-base leading-snug">
+                      Al ingresar, toca el botón <span className="text-gold font-semibold">"Activar Notificaciones Web"</span> y acepta el permiso del navegador.
                     </p>
                   </div>
-                </>
+                  <div className="h-px bg-gold/15" />
+                  <div className="flex gap-3 items-start">
+                    <span className="bg-gold/20 text-gold w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold shrink-0 mt-0.5">2</span>
+                    <p className="font-crimson text-white/90 text-base leading-snug">
+                      {isIOS ? 
+                        "En iOS, es obligatorio instalar la app usando 'Compartir' > 'Agregar al inicio' para recibir avisos." : 
+                        "Asegúrate de tener la app instalada en tu pantalla de inicio para mayor fiabilidad."}
+                    </p>
+                  </div>
+                  <button onClick={nextStep} className="w-full py-3 mt-4 rounded font-cinzel text-xs tracking-widest uppercase bg-gold/10 border border-gold/30 text-gold font-bold">
+                    Siguiente Paso ➔
+                  </button>
+                </div>
+              )}
+
+              {step === 2 && (
+                <div className="fade-in space-y-4">
+                  <h3 className="font-cinzel text-gold text-xs tracking-widest uppercase text-center mb-2">Ajuste de Segundo Plano</h3>
+                  
+                  {isAndroid ? (
+                    <div className="space-y-3">
+                      <p className="font-crimson text-white/80 text-sm leading-tight italic">Para recibir avisos con la app cerrada:</p>
+                      <ul className="space-y-2 text-sm font-crimson text-white/90">
+                        <li className="flex gap-2"><span>•</span> Mantén presionado el icono de la app en tu inicio.</li>
+                        <li className="flex gap-2"><span>•</span> Toca <span className="text-gold">"Info de la aplicación"</span> (o el icono ⓘ).</li>
+                        <li className="flex gap-2"><span>•</span> Ve a <span className="text-gold">"Batería"</span> y selecciona <span className="text-gold">"Sin Restricciones"</span>.</li>
+                      </ul>
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      <p className="font-crimson text-white/80 text-sm leading-tight italic">Para usuarios de iPhone/iPad:</p>
+                      <ul className="space-y-2 text-sm font-crimson text-white/90">
+                        <li className="flex gap-2"><span>•</span> Ve a <span className="text-gold">Ajustes > Notificaciones</span>.</li>
+                        <li className="flex gap-2"><span>•</span> Busca <span className="text-gold">"Oriente Fraterno"</span> en la lista.</li>
+                        <li className="flex gap-2"><span>•</span> Asegúrate de que todos los avisos estén permitidos.</li>
+                      </ul>
+                    </div>
+                  )}
+                  
+                  <div className="h-px bg-gold/15" />
+                  
+                  <button
+                    onClick={onClose}
+                    className="w-full py-3 rounded font-cinzel text-xs tracking-widest uppercase bg-gradient-to-r from-gold via-gold-light to-gold text-navy font-bold shadow-lg shadow-gold/20"
+                  >
+                    ¡Entendido, Terminar! ✦
+                  </button>
+                </div>
               )}
             </div>
-
-            <button
-              onClick={onClose}
-              className="w-full py-3 rounded font-cinzel text-xs tracking-widest uppercase bg-gradient-to-r from-gold via-gold-light to-gold text-navy font-bold shadow-lg shadow-gold/20"
-            >
-              Entendido ✦
-            </button>
+            
             <p className="font-cinzel text-gold/25 text-xs tracking-[0.2em] uppercase">✦ A L:. G:. A:. D:. U:. ✦</p>
           </div>
         </div>
