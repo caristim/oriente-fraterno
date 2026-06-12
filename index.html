@@ -94,22 +94,21 @@
   </style>
 
   <script>
-    // CORRECCIÓN: Eliminamos la espera eterna del service worker para asegurar el registro del token
+    // CORRECCIÓN: Aseguramos que el service worker esté listo antes de pedir el token
     async function registrarTokenFCM() {
       try {
         if (!('serviceWorker' in navigator) || !('Notification' in window) || !db) return;
         
-        // Solicitar permiso explícito primero
         const permiso = await Notification.requestPermission();
         if (permiso !== 'granted') {
-          console.warn('[FCM] Permiso de notificaciones denegado por el usuario.');
+          console.warn('[FCM] Permiso de notificaciones denegado.');
           return;
         }
 
         const messaging = firebase.messaging();
         
-        // Obtenemos el registro actual de forma directa
-        const reg = await navigator.serviceWorker.getRegistration('./');
+        // MEJORA: Esperar explícitamente a que el SW esté listo para evitar errores de registro
+        const reg = await navigator.serviceWorker.ready;
         
         const token = await messaging.getToken({
           vapidKey: 'BM1SqlyjKhW45Y2JSBqDTYRT5QBV0yduJBtonc_QrlqM1DgaDmanz_w1R0Qj40ZuiG-rz4s4stIqBuYmciutG9Y',
@@ -122,18 +121,17 @@
             try { await db.collection('fcm_tokens').doc(prevToken).delete(); } catch(_) {}
           }
           
-          // Forzar la escritura limpia en la colección
           await db.collection('fcm_tokens').doc(token).set({
             token: token,
             updatedAt: new Date().toISOString()
           });
           
           localStorage.setItem('fcm_token', token);
-          console.log('[FCM] Token registrado con éxito en Firestore.');
+          console.log('[FCM] Token registrado con éxito.');
           return true;
         }
       } catch(err) {
-        console.error('[FCM] Error crítico registrando token:', err.message);
+        console.error('[FCM] Error registrando token:', err.message);
       }
       return false;
     }
@@ -354,7 +352,7 @@
       const [dia, setDia]             = useState('');
       const [tipo, setTipo]           = useState('');
       const [notifPerm, setNotifPerm] = useState(() => typeof Notification !== 'undefined' ? Notification.permission : 'denied');
-      const [toast, setToast]         = useState({ msg:'', visible:false });
+      const [toast, setToast]         = useState({ msg: '', visible: false });
       const [loading, setLoading]     = useState(true);
       const [showWelcome, setShowWelcome] = useState(true);
       const toastTimer = useRef(null);
