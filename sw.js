@@ -1,17 +1,19 @@
-// Oriente Fraterno 148 - Service Worker v15
-// Notificaciones FCM en background sin necesidad de que la app esté abierta
+// Oriente Fraterno 148 - Service Worker v15 (Mejorado para Background)
+// Maneja notificaciones FCM en background y lógica local de respaldo
 
 importScripts('https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js');
 importScripts('https://www.gstatic.com/firebasejs/10.8.0/firebase-messaging-compat.js');
 
-const SW_VERSION = 'of-sw-v15';
-const APP_BASE   = 'https://caristim.github.io/oriente-fraterno/';
-const ICON_192   = 'https://caristim.github.io/oriente-fraterno/icon-192.png';
-const BADGE_URL  = 'https://caristim.github.io/oriente-fraterno/icon-192.png';
-const CACHE_NAME = 'of-cache-v15';
-const DB_NAME    = 'of_sw';
-const DB_VERSION = 1;
+const SW_VERSION  = 'of-sw-v15';
+const DB_NAME     = 'of_sw';
+const DB_VERSION  = 1;
+const APP_ORIGIN  = 'https://caristim.github.io';
+const APP_BASE    = 'https://caristim.github.io/oriente-fraterno/';
+const ICON_192    = 'https://caristim.github.io/oriente-fraterno/icon-192.png';
+const BADGE_URL   = 'https://caristim.github.io/oriente-fraterno/icon-192.png';
 
+// ── Recursos a pre-cachear ────────────────────────────────────────────────────
+const CACHE_NAME = 'of-cache-v15';
 const PRECACHE_URLS = [
   'https://caristim.github.io/oriente-fraterno/',
   'https://caristim.github.io/oriente-fraterno/index.html',
@@ -31,38 +33,42 @@ firebase.initializeApp({
 
 const messaging = firebase.messaging();
 
-// ── Handler de notificaciones FCM en background ───────────────────────────────
-//
-// DISEÑO IMPORTANTE:
-// El YAML envía el mensaje con SOLO el campo "webpush.data" (sin "webpush.notification").
-// Cuando no hay "notification" en el payload, el SO NO muestra nada automáticamente
-// y Firebase llama a onBackgroundMessage para que el SW decida qué mostrar.
-// Así evitamos el bug de notificación duplicada y tenemos control total.
-//
-// Si el YAML enviara "webpush.notification" Y el SW también llama a showNotification(),
-// el usuario vería DOS notificaciones. Por eso el YAML solo envía "data".
-//
-messaging.onBackgroundMessage(async (payload) => {
-  console.log('[SW-FCM] Mensaje recibido en background:', JSON.stringify(payload));
-
-  // Los datos vienen en payload.data (lo que el YAML pone en webpush.data)
-  const data   = payload.data || {};
-  const titulo = data.title || 'Oriente Fraterno 148';
-  const cuerpo = data.body  || 'Hoy hay un evento';
-  const url    = data.url   || APP_BASE;
-
-  await self.registration.showNotification(titulo, {
-    body:               cuerpo,
-    tag:                'of-fcm-' + (data.tag || Date.now()),
-    icon:               ICON_192,
-    badge:              BADGE_URL,
-    requireInteraction: true,
-    vibrate:            [200, 100, 200, 100, 200],
-    data:               { url },
-  });
-
-  console.log('[SW-FCM] Notificación mostrada:', titulo, '-', cuerpo);
+// ── Handler de notificaciones en background ───────────────────────────────────
+messaging.onBackgroundMessage(payload => {
+  console.log('[SW-FCM] Mensaje background recibido');
+  
+  // Si el payload contiene un objeto notification, el navegador lo mostrará automáticamente.
+  // Solo marcamos como notificado para evitar duplicados locales.
+  return markFcmFiredToday();
 });
+
+// ── Marca en fired[] los eventos de hoy notificados por FCM ──────────────────
+async function markFcmFiredToday() {
+  try {
+    const events = await dbGet('events');
+    if (!Array.isArray(events) || events.length === 0) return;
+    const now   = new Date();
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const fired = (await dbGet('fired')) || {};
+    let changed = false;
+    for (const ev of events) {
+      if (!ev.fecha || !ev.nombre || !ev.tipo) continue;
+      const parts = String(ev.fecha).split('-');
+      let month, day;
+      if (parts.length === 2)      [month, day] = parts.map(Number);
+      else if (parts.length === 3) [, month, day] = parts.map(Number);
+      else continue;
+      if (!month || !day) continue;
+      const evDay   = new Date(now.getFullYear(), month - 1, day);
+      const isToday = evDay.getTime() === today.getTime();
+      if (!isToday) continue;
+      const evId    = ev.docId || ev.id || `${ev.nombre}-${ev.fecha}`;
+      const fireKey = `${evId}-${now.getFullYear()}`;
+      if (!fired[fireKey]) { fired[fireKey] = true; changed = true; }
+    }
+    if (changed) await dbSet('fired', fired);
+  } catch (err) { console.warn('[SW] markFcmFiredToday error:', err); }
+}
 
 // ── IndexedDB helpers ─────────────────────────────────────────────────────────
 function openDB() {
@@ -97,17 +103,18 @@ async function dbSet(key, value) {
 
 // ── Lifecycle ─────────────────────────────────────────────────────────────────
 self.addEventListener('install', e => {
-  console.log('[SW]', SW_VERSION);
+  console.log('[SW] Instalando', SW_VERSION);
   e.waitUntil(
-    caches.open(CACHE_NAME).then(cache =>
-      cache.addAll(PRECACHE_URLS).catch(err =>
-        console.warn('[SW] Pre-cache parcial:', err)
-      )
-    ).then(() => self.skipWaiting())
+    caches.open(CACHE_NAME).then(cache => {
+      return cache.addAll(PRECACHE_URLS).catch(err => {
+        console.warn('[SW] Pre-cache parcial:', err);
+      });
+    }).then(() => self.skipWaiting())
   );
 });
 
 self.addEventListener('activate', e => {
+  console.log('[SW] Activando', SW_VERSION);
   e.waitUntil(
     caches.keys().then(keys =>
       Promise.all(
@@ -140,7 +147,7 @@ self.addEventListener('periodicsync', e => {
   }
 });
 
-// ── Background Sync estándar ──────────────────────────────────────────────────
+// ── Background Sync estándar (reconexión de red) ──────────────────────────────
 self.addEventListener('sync', e => {
   if (e.tag === 'of-check') {
     console.log('[SW] Background sync disparado');
@@ -148,7 +155,7 @@ self.addEventListener('sync', e => {
   }
 });
 
-// ── Fetch: Cache-First para recursos propios ──────────────────────────────────
+// ── Fetch: estrategia Cache-First para recursos propios, Network-First para el resto ──
 self.addEventListener('fetch', e => {
   const url = e.request.url;
   if (e.request.method !== 'GET') return;
@@ -163,10 +170,10 @@ self.addEventListener('fetch', e => {
             caches.open(CACHE_NAME).then(cache => cache.put(e.request, clone));
           }
           return response;
-        }).catch(() =>
-          caches.match('https://caristim.github.io/oriente-fraterno/index.html')
-            || new Response('Sin conexión', { status: 503 })
-        );
+        }).catch(() => {
+          return caches.match('https://caristim.github.io/oriente-fraterno/index.html')
+            || new Response('Sin conexión', { status: 503 });
+        });
       })
     );
     return;
@@ -194,17 +201,15 @@ self.addEventListener('notificationclick', e => {
   );
 });
 
-// ── Notificación local de respaldo (cuando FCM no llega) ─────────────────────
+// ── Notificación local de respaldo ────────────────────────────────────────────
 async function checkAndNotify() {
   try {
     const events = await dbGet('events');
     if (!Array.isArray(events) || events.length === 0) return;
-
     const now   = new Date();
     const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
     const fired = (await dbGet('fired')) || {};
     let changed = false;
-
     for (const ev of events) {
       if (!ev.fecha || !ev.nombre || !ev.tipo) continue;
       const parts = String(ev.fecha).split('-');
@@ -213,11 +218,9 @@ async function checkAndNotify() {
       else if (parts.length === 3) [, month, day] = parts.map(Number);
       else continue;
       if (!month || !day) continue;
-
       const evDay   = new Date(now.getFullYear(), month - 1, day);
       const isToday = evDay.getTime() === today.getTime();
       if (!isToday) continue;
-
       const evId    = ev.docId || ev.id || `${ev.nombre}-${ev.fecha}`;
       const fireKey = `${evId}-${now.getFullYear()}`;
       if (fired[fireKey]) continue;
@@ -236,7 +239,5 @@ async function checkAndNotify() {
       changed = true;
     }
     if (changed) await dbSet('fired', fired);
-  } catch (err) {
-    console.warn('[SW] checkAndNotify error:', err);
-  }
+  } catch (err) { console.warn('[SW] checkAndNotify error:', err); }
 }
