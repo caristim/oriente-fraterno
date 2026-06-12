@@ -40,11 +40,11 @@
   <!-- Lucide Icons CDN -->
   <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
 
-  <!-- Firebase SDK -->
+  <!-- Firebase SDK (solo para Android/Chrome vía FCM) -->
   <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-messaging-compat.js"></script>
-  
+
   <script>
     const firebaseConfig = {
       apiKey: "AIzaSyD9gQW61AvKHhNai6gljNFE7q9rS7KKuN8",
@@ -54,7 +54,10 @@
       messagingSenderId: "101867774014",
       appId: "1:101867774014:web:0b4bb797293910c419716f"
     };
-    
+
+    // VAPID public key (la misma que usás para FCM)
+    const VAPID_PUBLIC_KEY = 'BM1SqlyjKhW45Y2JSBqDTYRT5QBV0yduJBtonc_QrlqM1DgaDmanz_w1R0Qj40ZuiG-rz4s4stIqBuYmciutG9Y';
+
     let db = null;
     try {
       if (typeof firebase !== 'undefined') {
@@ -64,6 +67,137 @@
     } catch (e) {
       console.error("Error al inicializar Firebase:", e);
     }
+
+    // ── Detecta si el navegador es iOS Safari ──────────────────────────────
+    function isIOSBrowser() {
+      const ua = navigator.userAgent || '';
+      return /iPhone|iPad|iPod/i.test(ua);
+    }
+
+    // ── Convierte VAPID key de base64url a Uint8Array ──────────────────────
+    function urlBase64ToUint8Array(base64String) {
+      const padding = '='.repeat((4 - base64String.length % 4) % 4);
+      const base64  = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
+      const rawData = atob(base64);
+      return Uint8Array.from([...rawData].map(c => c.charCodeAt(0)));
+    }
+
+    // ── Registro Web Push nativo (iOS 16.4+ y cualquier navegador moderno) ──
+    async function registrarWebPushNativo() {
+      try {
+        if (!('serviceWorker' in navigator) || !('PushManager' in window) || !db) return false;
+
+        const permiso = await Notification.requestPermission();
+        if (permiso !== 'granted') {
+          console.warn('[WebPush] Permiso denegado.');
+          return false;
+        }
+
+        const reg = await navigator.serviceWorker.ready;
+
+        // Verificar si ya hay una suscripción activa
+        let sub = await reg.pushManager.getSubscription();
+
+        if (!sub) {
+          sub = await reg.pushManager.subscribe({
+            userVisibleOnly: true,
+            applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY)
+          });
+        }
+
+        if (!sub) return false;
+
+        const subJson    = sub.toJSON();
+        const endpoint   = subJson.endpoint;
+        const p256dh     = subJson.keys && subJson.keys.p256dh;
+        const auth       = subJson.keys && subJson.keys.auth;
+
+        if (!endpoint || !p256dh || !auth) return false;
+
+        // Guardamos la suscripción en Firestore en colección separada
+        await db.collection('webpush_subscriptions').doc(btoa(endpoint).replace(/[^a-zA-Z0-9]/g, '').substring(0, 100)).set({
+          endpoint,
+          p256dh,
+          auth,
+          platform: isIOSBrowser() ? 'ios' : 'other',
+          updatedAt: new Date().toISOString()
+        });
+
+        console.log('[WebPush] Suscripción nativa registrada con éxito.');
+        return true;
+      } catch (err) {
+        console.error('[WebPush] Error:', err.message);
+        return false;
+      }
+    }
+
+    // ── Registro FCM (Android / Chrome) ───────────────────────────────────
+    async function registrarTokenFCM() {
+      try {
+        if (!('serviceWorker' in navigator) || !('Notification' in window) || !db) return false;
+
+        const permiso = await Notification.requestPermission();
+        if (permiso !== 'granted') {
+          console.warn('[FCM] Permiso denegado.');
+          return false;
+        }
+
+        const messaging = firebase.messaging();
+        const reg       = await navigator.serviceWorker.ready;
+
+        const token = await messaging.getToken({
+          vapidKey: VAPID_PUBLIC_KEY,
+          serviceWorkerRegistration: reg
+        });
+
+        if (token) {
+          const prevToken = localStorage.getItem('fcm_token');
+          if (prevToken && prevToken !== token) {
+            try { await db.collection('fcm_tokens').doc(prevToken).delete(); } catch(_) {}
+          }
+
+          await db.collection('fcm_tokens').doc(token).set({
+            token:     token,
+            platform:  'android',
+            updatedAt: new Date().toISOString()
+          });
+
+          localStorage.setItem('fcm_token', token);
+          console.log('[FCM] Token registrado con éxito.');
+          return true;
+        }
+      } catch (err) {
+        console.error('[FCM] Error:', err.message);
+      }
+      return false;
+    }
+
+    // ── Punto de entrada: elige la estrategia según la plataforma ─────────
+    async function activarNotificaciones() {
+      if (isIOSBrowser()) {
+        // iOS: siempre usar Web Push nativo (FCM no funciona en Safari)
+        console.log('[Notif] Usando Web Push nativo (iOS)');
+        return await registrarWebPushNativo();
+      } else {
+        // Android / Chrome / otros: FCM primero, Web Push como respaldo
+        console.log('[Notif] Usando FCM (Android/Chrome)');
+        try {
+          const fcmOk = await registrarTokenFCM();
+          if (fcmOk) {
+            // También registramos Web Push nativo como respaldo en caso de que
+            // FCM no entregue (Doze mode, token caducado, etc.)
+            await registrarWebPushNativo().catch(() => {});
+            return true;
+          }
+        } catch (_) {}
+        // Si FCM falla (p. ej. navegador sin soporte), intentar Web Push
+        return await registrarWebPushNativo();
+      }
+    }
+
+    window._activarNotificaciones = activarNotificaciones;
+    // Alias legacy por si algún código interno lo llama
+    window._registrarTokenFCM = activarNotificaciones;
   </script>
 
   <!-- Google Fonts -->
@@ -92,51 +226,6 @@
     ::-webkit-scrollbar-track { background:#0f172a; }
     ::-webkit-scrollbar-thumb { background:#7a6128; border-radius:3px; }
   </style>
-
-  <script>
-    // CORRECCIÓN: Aseguramos que el service worker esté listo antes de pedir el token
-    async function registrarTokenFCM() {
-      try {
-        if (!('serviceWorker' in navigator) || !('Notification' in window) || !db) return;
-        
-        const permiso = await Notification.requestPermission();
-        if (permiso !== 'granted') {
-          console.warn('[FCM] Permiso de notificaciones denegado.');
-          return;
-        }
-
-        const messaging = firebase.messaging();
-        
-        // MEJORA: Esperar explícitamente a que el SW esté listo para evitar errores de registro
-        const reg = await navigator.serviceWorker.ready;
-        
-        const token = await messaging.getToken({
-          vapidKey: 'BM1SqlyjKhW45Y2JSBqDTYRT5QBV0yduJBtonc_QrlqM1DgaDmanz_w1R0Qj40ZuiG-rz4s4stIqBuYmciutG9Y',
-          serviceWorkerRegistration: reg
-        });
-
-        if (token) {
-          const prevToken = localStorage.getItem('fcm_token');
-          if (prevToken && prevToken !== token) {
-            try { await db.collection('fcm_tokens').doc(prevToken).delete(); } catch(_) {}
-          }
-          
-          await db.collection('fcm_tokens').doc(token).set({
-            token: token,
-            updatedAt: new Date().toISOString()
-          });
-          
-          localStorage.setItem('fcm_token', token);
-          console.log('[FCM] Token registrado con éxito.');
-          return true;
-        }
-      } catch(err) {
-        console.error('[FCM] Error registrando token:', err.message);
-      }
-      return false;
-    }
-    window._registrarTokenFCM = registrarTokenFCM;
-  </script>
 </head>
 
 <body class="bg-navy text-white bg-grid min-h-screen">
@@ -171,6 +260,8 @@
     function WelcomeScreen({ onClose }) {
       const { isIOS, isAndroid } = detectPlatform();
       const [step, setStep] = useState(1);
+      const iosVersion      = getIOSVersion();
+      const iosOld          = isIOS && iosVersion !== null && iosVersion < 16.4;
 
       const nextStep = () => setStep(s => s + 1);
 
@@ -190,6 +281,13 @@
             <div className="w-full rounded-lg border gold-border bg-navy-mid/80 shadow-xl ring-1 ring-gold/5 p-5 space-y-6">
               {step === 1 && (
                 <div className="fade-in space-y-4">
+                  {iosOld && (
+                    <div className="bg-red-900/30 border border-red-500/40 rounded p-3">
+                      <p className="font-crimson text-red-300 text-sm leading-snug">
+                        ⚠️ Tu iOS ({iosVersion}) no soporta notificaciones web. Actualiza a iOS 16.4 o superior para poder recibirlas.
+                      </p>
+                    </div>
+                  )}
                   <div className="flex gap-3 items-start">
                     <span className="bg-gold/20 text-gold w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold shrink-0 mt-0.5">1</span>
                     <p className="font-crimson text-white/90 text-base leading-snug">
@@ -200,9 +298,9 @@
                   <div className="flex gap-3 items-start">
                     <span className="bg-gold/20 text-gold w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold shrink-0 mt-0.5">2</span>
                     <p className="font-crimson text-white/90 text-base leading-snug">
-                      {isIOS ? 
-                        "En iOS, es obligatorio instalar la app usando 'Compartir' > 'Agregar al inicio' para recibir avisos." : 
-                        "Asegúrate de tener la app instalada en tu pantalla de inicio para mayor fiabilidad."}
+                      {isIOS
+                        ? "En iOS, es obligatorio instalar la app usando 'Compartir' → 'Agregar al inicio' para recibir avisos."
+                        : "Asegúrate de tener la app instalada en tu pantalla de inicio para mayor fiabilidad."}
                     </p>
                   </div>
                   <button onClick={nextStep} className="w-full py-3 mt-4 rounded font-cinzel text-xs tracking-widest uppercase bg-gold/10 border border-gold/30 text-gold font-bold">
@@ -214,7 +312,7 @@
               {step === 2 && (
                 <div className="fade-in space-y-4">
                   <h3 className="font-cinzel text-gold text-xs tracking-widest uppercase text-center mb-2">Ajuste de Segundo Plano</h3>
-                  
+
                   {isAndroid ? (
                     <div className="space-y-3">
                       <p className="font-crimson text-white/80 text-sm leading-tight italic">Para recibir avisos con la app cerrada:</p>
@@ -228,15 +326,15 @@
                     <div className="space-y-3">
                       <p className="font-crimson text-white/80 text-sm leading-tight italic">Para usuarios de iPhone/iPad:</p>
                       <ul className="space-y-2 text-sm font-crimson text-white/90">
-                        <li className="flex gap-2"><span>•</span> Ve a <span className="text-gold">Ajustes > Notificaciones</span>.</li>
-                        <li className="flex gap-2"><span>•</span> Busca <span className="text-gold">"Oriente Fraterno"</span> en la lista.</li>
-                        <li className="flex gap-2"><span>•</span> Asegúrate de que todos los avisos estén permitidos.</li>
+                        <li className="flex gap-2"><span>•</span> Instala la app: <span className="text-gold">Compartir → Agregar al inicio</span>.</li>
+                        <li className="flex gap-2"><span>•</span> Ve a <span className="text-gold">Ajustes → Notificaciones</span>.</li>
+                        <li className="flex gap-2"><span>•</span> Busca <span className="text-gold">"Oriente Fraterno"</span> y activa todos los avisos.</li>
                       </ul>
                     </div>
                   )}
-                  
+
                   <div className="h-px bg-gold/15" />
-                  
+
                   <button
                     onClick={onClose}
                     className="w-full py-3 rounded font-cinzel text-xs tracking-widest uppercase bg-gradient-to-r from-gold via-gold-light to-gold text-navy font-bold shadow-lg shadow-gold/20"
@@ -246,7 +344,7 @@
                 </div>
               )}
             </div>
-            
+
             <p className="font-cinzel text-gold/25 text-xs tracking-[0.2em] uppercase">✦ A L:. G:. A:. D:. U:. ✦</p>
           </div>
         </div>
@@ -394,7 +492,7 @@
       useEffect(() => {
         registerServiceWorker().then(async reg => {
           if (reg && Notification.permission === 'granted') {
-            if (window._registrarTokenFCM) await window._registrarTokenFCM();
+            if (window._activarNotificaciones) await window._activarNotificaciones();
           }
         });
       }, []);
@@ -445,15 +543,19 @@
       async function handleNotify() {
         if (!('Notification' in window)) { showToast('Navegador no soportado'); return; }
         showToast('Registrando dispositivo...');
-        
-        const exito = await window._registrarTokenFCM();
+
+        const exito = await window._activarNotificaciones();
         setNotifPerm(Notification.permission);
-        
+
         if (exito) {
           await syncEventsToSW(events);
           showToast('Notificaciones activadas ✦');
         } else {
-          showToast('Error al activar. Intenta de nuevo.');
+          if (Notification.permission === 'denied') {
+            showToast('Permiso denegado. Revisá los ajustes del navegador.');
+          } else {
+            showToast('Error al activar. Intenta de nuevo.');
+          }
         }
       }
 
