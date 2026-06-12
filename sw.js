@@ -1,10 +1,10 @@
-// Oriente Fraterno 148 - Service Worker v15 (Mejorado para Background)
-// Maneja notificaciones FCM en background y lógica local de respaldo
+// Oriente Fraterno 148 - Service Worker v16 (Dual Push: FCM + Web Push nativo para iOS)
+// Maneja notificaciones FCM en background (Android/Chrome) y Web Push nativo (iOS/Safari)
 
 importScripts('https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js');
 importScripts('https://www.gstatic.com/firebasejs/10.8.0/firebase-messaging-compat.js');
 
-const SW_VERSION  = 'of-sw-v15';
+const SW_VERSION  = 'of-sw-v16';
 const DB_NAME     = 'of_sw';
 const DB_VERSION  = 1;
 const APP_ORIGIN  = 'https://caristim.github.io';
@@ -13,7 +13,7 @@ const ICON_192    = 'https://caristim.github.io/oriente-fraterno/icon-192.png';
 const BADGE_URL   = 'https://caristim.github.io/oriente-fraterno/icon-192.png';
 
 // ── Recursos a pre-cachear ────────────────────────────────────────────────────
-const CACHE_NAME = 'of-cache-v15';
+const CACHE_NAME = 'of-cache-v16';
 const PRECACHE_URLS = [
   'https://caristim.github.io/oriente-fraterno/',
   'https://caristim.github.io/oriente-fraterno/index.html',
@@ -33,16 +33,55 @@ firebase.initializeApp({
 
 const messaging = firebase.messaging();
 
-// ── Handler de notificaciones en background ───────────────────────────────────
+// ── Handler FCM background (Android / Chrome) ─────────────────────────────────
+// Cuando llega un push FCM con objeto 'notification', el navegador lo muestra
+// automáticamente. Solo marcamos para evitar duplicados con el fallback local.
 messaging.onBackgroundMessage(payload => {
   console.log('[SW-FCM] Mensaje background recibido');
-  
-  // Si el payload contiene un objeto notification, el navegador lo mostrará automáticamente.
-  // Solo marcamos como notificado para evitar duplicados locales.
   return markFcmFiredToday();
 });
 
-// ── Marca en fired[] los eventos de hoy notificados por FCM ──────────────────
+// ── Handler Web Push nativo (iOS Safari y cualquier navegador estándar) ────────
+// Este evento se dispara para TODOS los pushes (FCM y Web Push nativo).
+// En Android/Chrome, FCM ya maneja la notificación visual; aquí solo actuamos
+// si el payload viene de Web Push nativo (sin objeto 'notification' de FCM).
+self.addEventListener('push', e => {
+  console.log('[SW-Push] Evento push nativo recibido');
+
+  e.waitUntil((async () => {
+    let titulo = 'Oriente Fraterno 148';
+    let cuerpo = 'Tenés un evento hoy ✦';
+    let url    = APP_BASE;
+
+    // Intentar parsear el payload enviado por GitHub Actions
+    if (e.data) {
+      try {
+        const data = e.data.json();
+        titulo = data.title || titulo;
+        cuerpo = data.body  || cuerpo;
+        url    = data.url   || url;
+      } catch (_) {
+        // Si no es JSON, usar el texto plano como cuerpo
+        const texto = e.data.text();
+        if (texto) cuerpo = texto;
+      }
+    }
+
+    await self.registration.showNotification(titulo, {
+      body:               cuerpo,
+      icon:               ICON_192,
+      badge:              BADGE_URL,
+      tag:                'of-webpush-' + Date.now(),
+      requireInteraction: true,
+      vibrate:            [200, 100, 200, 100, 200],
+      data:               { url },
+    });
+
+    await markFcmFiredToday();
+  })());
+});
+
+// ── Marca en fired[] los eventos de hoy notificados ──────────────────────────
 async function markFcmFiredToday() {
   try {
     const events = await dbGet('events');
@@ -155,7 +194,7 @@ self.addEventListener('sync', e => {
   }
 });
 
-// ── Fetch: estrategia Cache-First para recursos propios, Network-First para el resto ──
+// ── Fetch: Cache-First para recursos propios, Network-First para el resto ─────
 self.addEventListener('fetch', e => {
   const url = e.request.url;
   if (e.request.method !== 'GET') return;
@@ -201,7 +240,8 @@ self.addEventListener('notificationclick', e => {
   );
 });
 
-// ── Notificación local de respaldo ────────────────────────────────────────────
+// ── Notificación local de respaldo (cuando el SW ya tiene los eventos en IDB) ──
+// Se usa como tercer nivel de seguridad si FCM y Web Push nativo fallan.
 async function checkAndNotify() {
   try {
     const events = await dbGet('events');
