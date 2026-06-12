@@ -12,38 +12,35 @@ jobs:
       - name: Instalar dependencia web-push
         run: npm install web-push
 
-      - name: Verificar eventos y notificar (FCM + Web Push nativo)
+      - name: Verificar eventos y notificar (FCM data-only + Web Push nativo)
         env:
           FIREBASE_PROJECT_ID:      ${{ secrets.OF_FIREBASE_PROJECT_ID }}
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.OF_FIREBASE_SERVICE_ACCOUNT }}
-          # VAPID keys — generá las tuyas con: npx web-push generate-vapid-keys
-          # La clave pública DEBE coincidir con VAPID_PUBLIC_KEY en index.html y sw.js
-          VAPID_PUBLIC_KEY:  ${{ secrets.OF_VAPID_PUBLIC_KEY }}
-          VAPID_PRIVATE_KEY: ${{ secrets.OF_VAPID_PRIVATE_KEY }}
-          # Email de contacto para el header VAPID (puede ser el tuyo)
-          VAPID_SUBJECT:     ${{ secrets.OF_VAPID_SUBJECT }}
+          VAPID_PUBLIC_KEY:         ${{ secrets.OF_VAPID_PUBLIC_KEY }}
+          VAPID_PRIVATE_KEY:        ${{ secrets.OF_VAPID_PRIVATE_KEY }}
+          VAPID_SUBJECT:            ${{ secrets.OF_VAPID_SUBJECT }}
         run: |
           node << 'EOF'
           const https   = require('https');
           const crypto  = require('crypto');
           const webpush = require('web-push');
 
-          // ── Configurar web-push con las VAPID keys ──────────────────────────
+          // ── Configurar VAPID para Web Push nativo (iOS) ────────────────────
           webpush.setVapidDetails(
             process.env.VAPID_SUBJECT || 'mailto:admin@example.com',
             process.env.VAPID_PUBLIC_KEY,
             process.env.VAPID_PRIVATE_KEY
           );
 
-          // ── Helpers JWT para Google OAuth2 ────────────────────────────────
+          // ── Helpers JWT para Google OAuth2 ─────────────────────────────────
           function base64url(str) {
             return Buffer.from(str).toString('base64')
-              .replace(/\+/g,'-').replace(/\//g,'_').replace(/=/g,'');
+              .replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
           }
 
           function getGoogleToken(sa) {
             return new Promise((resolve, reject) => {
-              const now = Math.floor(Date.now() / 1000);
+              const now     = Math.floor(Date.now() / 1000);
               const header  = { alg: 'RS256', typ: 'JWT' };
               const payload = {
                 iss:   sa.client_email,
@@ -52,23 +49,24 @@ jobs:
                 iat:   now,
                 exp:   now + 3600
               };
-              const data = base64url(JSON.stringify(header)) + '.' + base64url(JSON.stringify(payload));
-              const sign = crypto.createSign('RSA-SHA256');
-              sign.update(data);
-              const jwt = data + '.' + sign.sign(sa.private_key, 'base64')
-                .replace(/\+/g,'-').replace(/\//g,'_').replace(/=/g,'');
+              const sigInput = base64url(JSON.stringify(header)) + '.' + base64url(JSON.stringify(payload));
+              const sign     = crypto.createSign('RSA-SHA256');
+              sign.update(sigInput);
+              const jwt = sigInput + '.' + sign.sign(sa.private_key, 'base64')
+                .replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
               const body = 'grant_type=urn%3Aietf%3Aparams%3Aoauth%3Agrant-type%3Ajwt-bearer&assertion=' + jwt;
+
               const req = https.request({
                 hostname: 'oauth2.googleapis.com',
-                path: '/token',
-                method: 'POST',
-                headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
-              }, (res) => {
+                path:     '/token',
+                method:   'POST',
+                headers:  { 'Content-Type': 'application/x-www-form-urlencoded' }
+              }, res => {
                 let d = '';
                 res.on('data', c => d += c);
                 res.on('end', () => {
                   const p = JSON.parse(d);
-                  p.access_token ? resolve(p.access_token) : reject(new Error('Token error: ' + d));
+                  p.access_token ? resolve(p.access_token) : reject(new Error('OAuth2 error: ' + d));
                 });
               });
               req.on('error', reject);
@@ -77,7 +75,7 @@ jobs:
             });
           }
 
-          // ── Firestore REST helpers ─────────────────────────────────────────
+          // ── Firestore REST helpers ──────────────────────────────────────────
           function firestoreGetPage(projectId, accessToken, collection, pageToken) {
             return new Promise((resolve, reject) => {
               let path = '/v1/projects/' + projectId + '/databases/(default)/documents/' + collection + '?pageSize=300';
@@ -86,7 +84,7 @@ jobs:
                 hostname: 'firestore.googleapis.com',
                 path,
                 headers: { 'Authorization': 'Bearer ' + accessToken }
-              }, (res) => {
+              }, res => {
                 let d = '';
                 res.on('data', c => d += c);
                 res.on('end', () => { try { resolve(JSON.parse(d)); } catch(e) { reject(e); } });
@@ -95,76 +93,84 @@ jobs:
           }
 
           async function firestoreGetAll(projectId, accessToken, collection) {
-            let allDocuments = [];
+            let docs      = [];
             let pageToken = null;
             do {
               const data = await firestoreGetPage(projectId, accessToken, collection, pageToken);
               if (data.error) return data;
-              allDocuments = allDocuments.concat(data.documents || []);
+              docs      = docs.concat(data.documents || []);
               pageToken = data.nextPageToken || null;
             } while (pageToken);
-            return { documents: allDocuments };
+            return { documents: docs };
           }
 
           function firestoreDelete(accessToken, docName) {
-            return new Promise((resolve) => {
-              const path = '/v1/' + docName;
+            return new Promise(resolve => {
               const req = https.request({
                 hostname: 'firestore.googleapis.com',
-                path,
-                method: 'DELETE',
-                headers: { 'Authorization': 'Bearer ' + accessToken }
-              }, (res) => {
-                let d = '';
-                res.on('data', c => d += c);
+                path:     '/v1/' + docName,
+                method:   'DELETE',
+                headers:  { 'Authorization': 'Bearer ' + accessToken }
+              }, res => {
+                res.resume();
                 res.on('end', () => {
-                  console.log('Token inválido eliminado (status ' + res.statusCode + ')');
+                  console.log('  Eliminado (status ' + res.statusCode + '): ' + docName.split('/').pop());
                   resolve();
                 });
               });
-              req.on('error', (e) => { console.warn('Error eliminando token: ' + e.message); resolve(); });
+              req.on('error', e => { console.warn('  Error eliminando:', e.message); resolve(); });
               req.end();
             });
           }
 
-          // ── Envío FCM (Android / Chrome) ───────────────────────────────────
-          function fcmSend(projectId, accessToken, token, titulo, cuerpo) {
+          // ── Envío FCM: DATA-ONLY payload ────────────────────────────────────
+          //
+          // ¡¡CRÍTICO!! Se usa SOLO el campo "data:{}" sin "notification:{}".
+          //
+          // Motivo: cuando el payload incluye "notification:{}", el SDK de
+          // Firebase en el SW muestra la notificación de forma automática y
+          // silencia onBackgroundMessage() en muchos dispositivos Android,
+          // haciendo que la notificación nunca aparezca con la app cerrada.
+          //
+          // Con data-only, onBackgroundMessage() siempre se dispara y el SW
+          // muestra la notificación explícitamente → fiabilidad garantizada.
+          //
+          function fcmSend(projectId, accessToken, token, titulo, cuerpo, tag) {
             return new Promise((resolve, reject) => {
               const body = JSON.stringify({
                 message: {
                   token: token,
-                  notification: {
+                  // ── SIN campo "notification" aquí ── eso es intencional ──
+                  data: {
                     title: titulo,
-                    body:  cuerpo
+                    body:  cuerpo,
+                    url:   'https://caristim.github.io/oriente-fraterno/',
+                    tag:   tag
                   },
+                  // Prioridad alta para Android Doze mode
+                  android: {
+                    priority: 'high',
+                    ttl:      '86400s'
+                  },
+                  // Webpush: solo TTL y urgency, sin notification
                   webpush: {
                     headers: {
                       'Urgency': 'high',
-                      'TTL': '86400'
-                    },
-                    notification: {
-                      title: titulo,
-                      body:  cuerpo,
-                      icon:  'https://caristim.github.io/oriente-fraterno/icon-192.png',
-                      badge: 'https://caristim.github.io/oriente-fraterno/icon-192.png',
-                      requireInteraction: true,
-                      vibrate: [200, 100, 200, 100, 200],
-                      data: {
-                        url:   'https://caristim.github.io/oriente-fraterno/',
-                        title: titulo,
-                        body:  cuerpo
-                      }
-                    },
-                    fcm_options: { link: 'https://caristim.github.io/oriente-fraterno/' }
+                      'TTL':     '86400'
+                    }
                   }
                 }
               });
+
               const req = https.request({
                 hostname: 'fcm.googleapis.com',
                 path:     '/v1/projects/' + projectId + '/messages:send',
                 method:   'POST',
-                headers:  { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + accessToken }
-              }, (res) => {
+                headers:  {
+                  'Content-Type':  'application/json',
+                  'Authorization': 'Bearer ' + accessToken
+                }
+              }, res => {
                 let r = '';
                 res.on('data', c => r += c);
                 res.on('end', () => {
@@ -172,13 +178,13 @@ jobs:
                   try { parsed = JSON.parse(r); } catch(_) {}
                   if (parsed.error) {
                     const details   = parsed.error.details || [];
-                    const fcmError  = details.find(d => d.errorCode);
-                    const errorCode = fcmError ? fcmError.errorCode : parsed.error.status;
-                    const isInvalid = ['UNREGISTERED', 'INVALID_ARGUMENT'].includes(errorCode);
-                    console.log('FCM error [' + errorCode + '] token: ' + token.substring(0, 20) + '...');
-                    resolve({ invalid: isInvalid });
+                    const fcmErr    = details.find(d => d.errorCode);
+                    const errorCode = fcmErr ? fcmErr.errorCode : parsed.error.status;
+                    const invalid   = ['UNREGISTERED', 'INVALID_ARGUMENT'].includes(errorCode);
+                    console.log('  FCM error [' + errorCode + ']: ' + token.substring(0, 24) + '...');
+                    resolve({ invalid });
                   } else {
-                    console.log('FCM OK: ' + token.substring(0, 20) + '...');
+                    console.log('  FCM OK: ' + token.substring(0, 24) + '...');
                     resolve({ invalid: false });
                   }
                 });
@@ -189,78 +195,89 @@ jobs:
             });
           }
 
-          // ── Envío Web Push nativo (iOS Safari y otros) ─────────────────────
-          async function webPushSend(subscription, titulo, cuerpo) {
+          // ── Envío Web Push nativo (iOS / Firefox / Edge) ───────────────────
+          async function webPushSend(subscription, titulo, cuerpo, tag) {
             try {
               const payload = JSON.stringify({
                 title: titulo,
                 body:  cuerpo,
-                url:   'https://caristim.github.io/oriente-fraterno/'
+                url:   'https://caristim.github.io/oriente-fraterno/',
+                tag:   tag
               });
               await webpush.sendNotification(subscription, payload, {
-                TTL: 86400,
+                TTL:     86400,
                 urgency: 'high'
               });
-              console.log('WebPush OK: ' + subscription.endpoint.substring(0, 40) + '...');
+              console.log('  WebPush OK: ' + subscription.endpoint.substring(0, 50) + '...');
               return { invalid: false };
             } catch (err) {
-              const isInvalid = err.statusCode === 404 || err.statusCode === 410;
-              console.log('WebPush error [' + err.statusCode + ']: ' + subscription.endpoint.substring(0, 40) + '...');
-              return { invalid: isInvalid };
+              // 404 / 410 = suscripción expirada o cancelada
+              const invalid = err.statusCode === 404 || err.statusCode === 410;
+              console.log('  WebPush error [' + (err.statusCode || err.message) + ']: '
+                + subscription.endpoint.substring(0, 50) + '...');
+              return { invalid };
             }
           }
 
-          // ── Main ──────────────────────────────────────────────────────────
+          // ── MAIN ────────────────────────────────────────────────────────────
           async function main() {
+            // Calcular fecha en Uruguay (UTC-3, sin DST desde 2015)
             const ahora     = new Date();
-            const localTime = new Date(ahora.getTime() + (-3 * 60 * 60000));
-            const dia       = String(localTime.getUTCDate()).padStart(2,'0');
-            const mes       = String(localTime.getUTCMonth() + 1).padStart(2,'0');
-            const fechaHoy  = mes + '-' + dia;
+            const localTime = new Date(ahora.getTime() - (3 * 60 * 60 * 1000));
+            const dia       = String(localTime.getUTCDate()).padStart(2, '0');
+            const mes       = String(localTime.getUTCMonth() + 1).padStart(2, '0');
+            const fechaHoy  = mes + '-' + dia;   // MM-DD (igual que en Firestore)
             const projectId = process.env.FIREBASE_PROJECT_ID;
 
-            console.log('Fecha Uruguay:', fechaHoy);
+            console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+            console.log('Oriente Fraterno 148 — Notificador de Eventos');
+            console.log('Hora UTC:', ahora.toISOString());
+            console.log('Fecha Uruguay:', fechaHoy, '(hora local:', localTime.getUTCHours() + ':00)');
+            console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
 
+            // Obtener token OAuth2
             const sa          = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
             const accessToken = await getGoogleToken(sa);
-            console.log('Token Google OAuth2 OK');
+            console.log('Token Google OAuth2: OK');
 
+            // ── Leer eventos de Firestore ────────────────────────────────────
+            console.log('\n[1/4] Leyendo eventos de Firestore...');
             const eventosData = await firestoreGetAll(projectId, accessToken, 'eventos');
             if (eventosData.error) {
               console.error('Error leyendo eventos:', JSON.stringify(eventosData.error));
               process.exit(1);
             }
-            const eventos = (eventosData.documents || []).map(doc => {
+            const todosLosEventos = (eventosData.documents || []).map(doc => {
               const f = doc.fields || {};
               return {
                 nombre: (f.nombre && f.nombre.stringValue) || '',
                 fecha:  (f.fecha  && f.fecha.stringValue)  || '',
                 tipo:   (f.tipo   && f.tipo.stringValue)   || ''
               };
-            }).filter(e => e.fecha === fechaHoy);
+            });
+            console.log('  Total eventos en Firestore:', todosLosEventos.length);
 
+            const eventos = todosLosEventos.filter(e => e.fecha === fechaHoy);
             if (eventos.length === 0) {
-              console.log('Hoy no hay eventos. Saliendo.');
+              console.log('\nHoy (' + fechaHoy + ') no hay eventos registrados. Nada que enviar.');
+              console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
               return;
             }
-            console.log('Eventos hoy:', eventos.map(e => e.nombre).join(', '));
+            console.log('  Eventos para hoy:', eventos.map(e => e.nombre + ' (' + e.tipo + ')').join(', '));
 
-            const fcmTokensData = await firestoreGetAll(projectId, accessToken, 'fcm_tokens');
-            if (fcmTokensData.error) {
-              console.error('Error leyendo fcm_tokens:', JSON.stringify(fcmTokensData.error));
-              process.exit(1);
-            }
-            const fcmTokenDocs = (fcmTokensData.documents || []).map(doc => ({
+            // ── Leer tokens FCM ──────────────────────────────────────────────
+            console.log('\n[2/4] Leyendo tokens FCM (Android/Chrome)...');
+            const fcmData = await firestoreGetAll(projectId, accessToken, 'fcm_tokens');
+            const fcmDocs = fcmData.error ? [] : (fcmData.documents || []).map(doc => ({
               token:   (doc.fields && doc.fields.token && doc.fields.token.stringValue) || '',
               docName: doc.name
-            })).filter(d => d.token.length > 0);
-            console.log('Tokens FCM registrados:', fcmTokenDocs.length);
+            })).filter(d => d.token.length > 10);
+            console.log('  Tokens FCM registrados:', fcmDocs.length);
 
-            const wpSubsData = await firestoreGetAll(projectId, accessToken, 'webpush_subscriptions');
-            if (wpSubsData.error) {
-              console.warn('Advertencia leyendo webpush_subscriptions:', JSON.stringify(wpSubsData.error));
-            }
-            const wpSubDocs = ((wpSubsData && wpSubsData.documents) || []).map(doc => {
+            // ── Leer suscripciones Web Push nativas ─────────────────────────
+            console.log('\n[3/4] Leyendo suscripciones Web Push (iOS/otros)...');
+            const wpData = await firestoreGetAll(projectId, accessToken, 'webpush_subscriptions');
+            const wpDocs = (!wpData || wpData.error) ? [] : (wpData.documents || []).map(doc => {
               const f = doc.fields || {};
               return {
                 endpoint: (f.endpoint && f.endpoint.stringValue) || '',
@@ -270,49 +287,71 @@ jobs:
                 docName:  doc.name
               };
             }).filter(d => d.endpoint && d.p256dh && d.auth);
-            console.log('Suscripciones Web Push nativas registradas:', wpSubDocs.length);
+            console.log('  Suscripciones Web Push:', wpDocs.length);
 
-            const fcmInvalidos  = new Set();
-            const wpInvalidos   = new Set();
+            if (fcmDocs.length === 0 && wpDocs.length === 0) {
+              console.log('\n⚠️  No hay dispositivos registrados. Nadie recibirá notificación.');
+              console.log('  Asegúrate de que los usuarios hayan pulsado "Activar Notificaciones".');
+              return;
+            }
+
+            // ── Enviar notificaciones ────────────────────────────────────────
+            console.log('\n[4/4] Enviando notificaciones...');
+            const fcmInvalidos = new Set();
+            const wpInvalidos  = new Set();
 
             for (const ev of eventos) {
               const titulo = 'Oriente Fraterno 148';
-              const msg    = 'Hoy: ' + ev.tipo + ' de ' + ev.nombre;
-              console.log('Enviando:', msg);
+              const cuerpo = 'Hoy: ' + ev.tipo + ' de ' + ev.nombre;
+              const tag    = 'of-ev-' + ev.nombre.replace(/\s+/g, '-').toLowerCase().substring(0, 30) + '-' + fechaHoy;
 
-              for (const td of fcmTokenDocs) {
-                const result = await fcmSend(projectId, accessToken, td.token, titulo, msg);
-                if (result.invalid) fcmInvalidos.add(td.docName);
+              console.log('\n  ✦ Evento: ' + cuerpo);
+
+              // FCM (Android/Chrome) — payload data-only
+              if (fcmDocs.length > 0) {
+                console.log('  FCM → ' + fcmDocs.length + ' dispositivo(s):');
+                for (const td of fcmDocs) {
+                  const r = await fcmSend(projectId, accessToken, td.token, titulo, cuerpo, tag);
+                  if (r.invalid) fcmInvalidos.add(td.docName);
+                }
               }
 
-              for (const sub of wpSubDocs) {
-                const subscription = {
-                  endpoint: sub.endpoint,
-                  keys: { p256dh: sub.p256dh, auth: sub.auth }
-                };
-                const result = await webPushSend(subscription, titulo, msg);
-                if (result.invalid) wpInvalidos.add(sub.docName);
+              // Web Push nativo (iOS/Safari/Firefox)
+              if (wpDocs.length > 0) {
+                console.log('  WebPush → ' + wpDocs.length + ' dispositivo(s):');
+                for (const sub of wpDocs) {
+                  const subscription = {
+                    endpoint: sub.endpoint,
+                    keys:     { p256dh: sub.p256dh, auth: sub.auth }
+                  };
+                  const r = await webPushSend(subscription, titulo, cuerpo, tag);
+                  if (r.invalid) wpInvalidos.add(sub.docName);
+                }
               }
             }
 
+            // ── Limpiar tokens inválidos ─────────────────────────────────────
             if (fcmInvalidos.size > 0) {
-              console.log('Limpiando', fcmInvalidos.size, 'token(s) FCM inválido(s)...');
-              for (const docName of fcmInvalidos) {
-                await firestoreDelete(accessToken, docName);
-              }
+              console.log('\nLimpiando ' + fcmInvalidos.size + ' token(s) FCM inválido(s)...');
+              for (const dn of fcmInvalidos) await firestoreDelete(accessToken, dn);
             }
-
             if (wpInvalidos.size > 0) {
-              console.log('Limpiando', wpInvalidos.size, 'suscripción(es) Web Push inválida(s)...');
-              for (const docName of wpInvalidos) {
-                await firestoreDelete(accessToken, docName);
-              }
+              console.log('\nLimpiando ' + wpInvalidos.size + ' suscripción(es) Web Push inválida(s)...');
+              for (const dn of wpInvalidos) await firestoreDelete(accessToken, dn);
             }
 
-            console.log('Proceso completado.');
-            console.log('  FCM enviados:', fcmTokenDocs.length - fcmInvalidos.size, '/', fcmTokenDocs.length);
-            console.log('  WebPush enviados:', wpSubDocs.length - wpInvalidos.size, '/', wpSubDocs.length);
+            // ── Resumen final ────────────────────────────────────────────────
+            console.log('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+            console.log('Proceso completado exitosamente.');
+            console.log('  FCM enviados:     ' + (fcmDocs.length - fcmInvalidos.size) + ' / ' + fcmDocs.length);
+            console.log('  WebPush enviados: ' + (wpDocs.length - wpInvalidos.size)  + ' / ' + wpDocs.length);
+            console.log('  Tokens inválidos eliminados: FCM=' + fcmInvalidos.size + ', WP=' + wpInvalidos.size);
+            console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
           }
 
-          main().catch(e => { console.error('Error fatal:', e.message); process.exit(1); });
+          main().catch(e => {
+            console.error('\n❌ Error fatal:', e.message);
+            console.error(e.stack);
+            process.exit(1);
+          });
           EOF
