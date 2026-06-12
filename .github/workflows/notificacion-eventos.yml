@@ -2,7 +2,7 @@ name: Notificacion Eventos 9AM
 
 'on':
   schedule:
-    - cron: '0 12 * * *'   # 09:00 Uruguay (UTC-3, sin horario de verano desde 2015)
+    - cron: '0 12 * * *'   # 09:00 Uruguay (UTC-3)
   workflow_dispatch:         # Permite ejecutar manualmente para probar
 
 jobs:
@@ -110,48 +110,41 @@ jobs:
 
           function fcmSend(projectId, accessToken, token, titulo, cuerpo) {
             return new Promise((resolve, reject) => {
-              //
-              // DISEÑO CLAVE: se envía SOLO "webpush.data", sin "webpush.notification".
-              //
-              // ¿Por qué? Cuando el payload incluye "webpush.notification", el SO
-              // (Android/Chrome) muestra la notificación automáticamente Y además
-              // Firebase llama a onBackgroundMessage, con lo que el SW la mostraría
-              // una segunda vez → el usuario vería DOS notificaciones.
-              //
-              // Al enviar solo "data", el SO no muestra nada por su cuenta y Firebase
-              // invoca onBackgroundMessage, donde el SW muestra UNA notificación con
-              // control total del contenido. Este es el patrón correcto según la
-              // documentación de Firebase y los issues oficiales del SDK.
-              //
+              // MEJORA: Payload robusto con objeto 'notification' de nivel superior para asegurar visualización en background
               const body = JSON.stringify({
                 message: {
                   token: token,
+                  notification: {
+                    title: titulo,
+                    body: cuerpo
+                  },
                   webpush: {
                     headers: {
-                      'Urgency': 'high',
-                      'TTL': '86400'
+                      "Urgency": "high",
+                      "TTL": "86400"
                     },
-                    data: {
+                    notification: {
                       title: titulo,
                       body:  cuerpo,
-                      url:   'https://caristim.github.io/oriente-fraterno/',
-                      tag:   'of-' + Date.now()
+                      icon:  'https://caristim.github.io/oriente-fraterno/icon-192.png',
+                      badge: 'https://caristim.github.io/oriente-fraterno/icon-192.png',
+                      requireInteraction: true,
+                      vibrate: [200, 100, 200, 100, 200],
+                      data: {
+                        url: 'https://caristim.github.io/oriente-fraterno/',
+                        title: titulo,
+                        body: cuerpo
+                      }
                     },
-                    fcm_options: {
-                      link: 'https://caristim.github.io/oriente-fraterno/'
-                    }
+                    fcm_options: { link: 'https://caristim.github.io/oriente-fraterno/' }
                   }
                 }
               });
-
               const req = https.request({
                 hostname: 'fcm.googleapis.com',
                 path:     '/v1/projects/' + projectId + '/messages:send',
                 method:   'POST',
-                headers:  {
-                  'Content-Type':  'application/json',
-                  'Authorization': 'Bearer ' + accessToken
-                }
+                headers:  { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + accessToken }
               }, (res) => {
                 let r = '';
                 res.on('data', c => r += c);
@@ -160,12 +153,12 @@ jobs:
                   try { parsed = JSON.parse(r); } catch(_) {}
 
                   if (parsed.error) {
-                    const details   = parsed.error.details || [];
-                    const fcmError  = details.find(d => d.errorCode);
+                    const details = parsed.error.details || [];
+                    const fcmError = details.find(d => d.errorCode);
                     const errorCode = fcmError ? fcmError.errorCode : parsed.error.status;
-                    const isInvalid = ['UNREGISTERED', 'INVALID_ARGUMENT'].includes(errorCode);
+                    const isInvalidToken = ['UNREGISTERED', 'INVALID_ARGUMENT'].includes(errorCode);
                     console.log('FCM error [' + errorCode + '] token: ' + token.substring(0, 20) + '...');
-                    resolve({ invalid: isInvalid });
+                    resolve({ invalid: isInvalidToken });
                   } else {
                     console.log('FCM OK: ' + token.substring(0, 20) + '...');
                     resolve({ invalid: false });
@@ -206,11 +199,8 @@ jobs:
               };
             }).filter(e => e.fecha === fechaHoy);
 
-            if (eventos.length === 0) {
-              console.log('Hoy no hay eventos. No se envian notificaciones.');
-              return;
-            }
-            console.log('Eventos hoy: ' + eventos.map(e => e.nombre + ' (' + e.tipo + ')').join(', '));
+            if (eventos.length === 0) { console.log('Hoy no hay eventos.'); return; }
+            console.log('Eventos hoy: ' + eventos.map(e => e.nombre).join(', '));
 
             const tokensData = await firestoreGetAll(projectId, accessToken, 'fcm_tokens');
             if (tokensData.error) {
@@ -222,17 +212,14 @@ jobs:
               docName: doc.name
             })).filter(d => d.token.length > 0);
 
-            if (tokenDocs.length === 0) {
-              console.log('No hay tokens FCM registrados. Nadie recibira notificacion.');
-              return;
-            }
+            if (tokenDocs.length === 0) { console.log('No hay tokens FCM registrados.'); return; }
             console.log('Tokens registrados: ' + tokenDocs.length);
 
             const tokenesInvalidos = new Set();
 
             for (const ev of eventos) {
               const msg = 'Hoy: ' + ev.tipo + ' de ' + ev.nombre;
-              console.log('Enviando: "' + msg + '" a ' + tokenDocs.length + ' dispositivo(s)...');
+              console.log('Enviando: ' + msg);
               for (const td of tokenDocs) {
                 const result = await fcmSend(projectId, accessToken, td.token, 'Oriente Fraterno 148', msg);
                 if (result.invalid) {
@@ -251,5 +238,5 @@ jobs:
             console.log('Proceso completado.');
           }
 
-          main().catch(e => { console.error('Error fatal: ' + e.message); process.exit(1); });
+          main().catch(e => { console.error('Error: ' + e.message); process.exit(1); });
           EOF
