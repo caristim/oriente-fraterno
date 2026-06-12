@@ -420,7 +420,7 @@
     async function registerServiceWorker() {
       if (!('serviceWorker' in navigator)) return null;
       try {
-        swRegistration = await navigator.serviceWorker.register('./sw.js', { scope: './', updateViaCache: 'none' });
+        swRegistration = await navigator.serviceWorker.register('./sw.js', { scope: '/oriente-fraterno/', updateViaCache: 'none' });
         return swRegistration;
       } catch (err) { return null; }
     }
