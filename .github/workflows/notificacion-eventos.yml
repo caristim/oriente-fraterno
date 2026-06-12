@@ -204,7 +204,6 @@ jobs:
               console.log('WebPush OK: ' + subscription.endpoint.substring(0, 40) + '...');
               return { invalid: false };
             } catch (err) {
-              // 404 / 410 = suscripción expirada o cancelada por el usuario
               const isInvalid = err.statusCode === 404 || err.statusCode === 410;
               console.log('WebPush error [' + err.statusCode + ']: ' + subscription.endpoint.substring(0, 40) + '...');
               return { invalid: isInvalid };
@@ -214,11 +213,10 @@ jobs:
           // ── Main ──────────────────────────────────────────────────────────
           async function main() {
             const ahora     = new Date();
-            // Uruguay es UTC-3 todo el año (sin DST desde 2015)
             const localTime = new Date(ahora.getTime() + (-3 * 60 * 60000));
             const dia       = String(localTime.getUTCDate()).padStart(2,'0');
             const mes       = String(localTime.getUTCMonth() + 1).padStart(2,'0');
-            const fechaHoy  = mes + '-' + dia;   // formato MM-DD, igual al guardado en Firestore
+            const fechaHoy  = mes + '-' + dia;
             const projectId = process.env.FIREBASE_PROJECT_ID;
 
             console.log('Fecha Uruguay:', fechaHoy);
@@ -227,7 +225,6 @@ jobs:
             const accessToken = await getGoogleToken(sa);
             console.log('Token Google OAuth2 OK');
 
-            // ── Leer eventos de Firestore ──────────────────────────────────
             const eventosData = await firestoreGetAll(projectId, accessToken, 'eventos');
             if (eventosData.error) {
               console.error('Error leyendo eventos:', JSON.stringify(eventosData.error));
@@ -248,7 +245,6 @@ jobs:
             }
             console.log('Eventos hoy:', eventos.map(e => e.nombre).join(', '));
 
-            // ── Leer tokens FCM (Android/Chrome) ──────────────────────────
             const fcmTokensData = await firestoreGetAll(projectId, accessToken, 'fcm_tokens');
             if (fcmTokensData.error) {
               console.error('Error leyendo fcm_tokens:', JSON.stringify(fcmTokensData.error));
@@ -260,10 +256,8 @@ jobs:
             })).filter(d => d.token.length > 0);
             console.log('Tokens FCM registrados:', fcmTokenDocs.length);
 
-            // ── Leer suscripciones Web Push nativas (iOS/Safari) ──────────
             const wpSubsData = await firestoreGetAll(projectId, accessToken, 'webpush_subscriptions');
             if (wpSubsData.error) {
-              // Si la colección no existe aún, no es un error fatal
               console.warn('Advertencia leyendo webpush_subscriptions:', JSON.stringify(wpSubsData.error));
             }
             const wpSubDocs = ((wpSubsData && wpSubsData.documents) || []).map(doc => {
@@ -281,19 +275,16 @@ jobs:
             const fcmInvalidos  = new Set();
             const wpInvalidos   = new Set();
 
-            // ── Enviar a cada evento ───────────────────────────────────────
             for (const ev of eventos) {
               const titulo = 'Oriente Fraterno 148';
               const msg    = 'Hoy: ' + ev.tipo + ' de ' + ev.nombre;
               console.log('Enviando:', msg);
 
-              // Envío FCM
               for (const td of fcmTokenDocs) {
                 const result = await fcmSend(projectId, accessToken, td.token, titulo, msg);
                 if (result.invalid) fcmInvalidos.add(td.docName);
               }
 
-              // Envío Web Push nativo
               for (const sub of wpSubDocs) {
                 const subscription = {
                   endpoint: sub.endpoint,
@@ -304,7 +295,6 @@ jobs:
               }
             }
 
-            // ── Limpiar tokens/suscripciones inválidos ─────────────────────
             if (fcmInvalidos.size > 0) {
               console.log('Limpiando', fcmInvalidos.size, 'token(s) FCM inválido(s)...');
               for (const docName of fcmInvalidos) {
