@@ -1,29 +1,25 @@
-// Oriente Fraterno 148 — Service Worker v18
-// CORRECCIONES v18:
-//  1. Eliminado conflicto FCM SDK vs self.addEventListener('push'):
-//     onBackgroundMessage() ahora hace showNotification() explícitamente.
-//     self.addEventListener('push') solo maneja Web Push nativo (iOS).
-//  2. checkAndNotify() restaurado como tercer nivel de seguridad.
-//  3. SCHEDULE_EVENTS vuelve a llamar checkAndNotify() después de guardar.
-//  4. Tags únicos por evento para que múltiples eventos del mismo día
-//     no se sobreescriban.
+// Oriente Fraterno 148 — Service Worker v18.1
+// CORRECCIONES v18.1:
+//  1. URLs normalizadas para evitar redirecciones de GitHub Pages.
+//  2. APP_BASE apunta a index.html para asegurar el clic en la notificación.
 
 importScripts('https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js');
 importScripts('https://www.gstatic.com/firebasejs/10.8.0/firebase-messaging-compat.js');
 
-const SW_VERSION = 'of-sw-v18';
+const SW_VERSION = 'of-sw-v18.1';
 const DB_NAME    = 'of_sw';
-const APP_BASE   = 'https://caristim.github.io/oriente-fraterno/';
+const APP_URL    = 'https://caristim.github.io/oriente-fraterno/index.html';
+const APP_ROOT   = 'https://caristim.github.io/oriente-fraterno/';
 const ICON_192   = 'https://caristim.github.io/oriente-fraterno/icon-192.png';
 const BADGE_URL  = 'https://caristim.github.io/oriente-fraterno/icon-192.png';
 
-const CACHE_NAME   = 'of-cache-v18';
+const CACHE_NAME   = 'of-cache-v18.1';
 const PRECACHE_URLS = [
-  APP_BASE,
-  APP_BASE + 'index.html',
-  APP_BASE + 'manifest.json',
-  APP_BASE + 'icon-192.png',
-  APP_BASE + 'icon-512.png',
+  APP_ROOT,
+  APP_URL,
+  APP_ROOT + 'manifest.json',
+  APP_ROOT + 'icon-192.png',
+  APP_ROOT + 'icon-512.png',
 ];
 
 // ── Inicialización Firebase ───────────────────────────────────────────────────
@@ -43,15 +39,6 @@ try {
 }
 
 // ── HANDLER FCM BACKGROUND (Android / Chrome con app CERRADA) ────────────────
-//
-// REGLA CRÍTICA: el payload FCM enviado desde GitHub Actions debe ser
-// DATA-ONLY (sin campo "notification:{}"). De esta forma el SDK de Firebase
-// NO muestra la notificación automáticamente, y onBackgroundMessage() siempre
-// se dispara, dejándonos mostrar la notificación manualmente aquí.
-//
-// Si el payload tuviera "notification:{}", el SDK la mostraría solo y
-// onBackgroundMessage NO se llamaría en muchos dispositivos → bug original.
-//
 if (fcmMessaging) {
   fcmMessaging.onBackgroundMessage(async payload => {
     console.log('[SW-FCM] onBackgroundMessage recibido:', JSON.stringify(payload));
@@ -59,10 +46,9 @@ if (fcmMessaging) {
     const data   = payload.data || {};
     const titulo = data.title || 'Oriente Fraterno 148';
     const cuerpo = data.body  || 'Tenés un evento hoy ✦';
-    const url    = data.url   || APP_BASE;
+    const url    = data.url   || APP_URL;
     const evTag  = data.tag   || ('of-fcm-' + Date.now());
 
-    // Mostrar la notificación explícitamente (obligatorio con data-only payload)
     await self.registration.showNotification(titulo, {
       body:               cuerpo,
       icon:               ICON_192,
@@ -78,22 +64,12 @@ if (fcmMessaging) {
 }
 
 // ── HANDLER WEB PUSH NATIVO (iOS Safari / Firefox / Edge) ────────────────────
-//
-// Este handler recibe los pushes enviados por la librería web-push (node.js)
-// desde GitHub Actions a los endpoints guardados en webpush_subscriptions.
-// Es el único canal para iOS, donde FCM no funciona.
-//
-// IMPORTANTE: En Android/Chrome, cuando el SDK de Firebase está cargado,
-// los pushes FCM son interceptados por el SDK ANTES de llegar aquí.
-// Por eso este handler NO se activa para mensajes FCM en Android —
-// y no hay colisión entre los dos handlers.
-//
 self.addEventListener('push', e => {
   console.log('[SW-Push] Evento push nativo recibido (iOS/Web Push)');
 
   let titulo = 'Oriente Fraterno 148';
   let cuerpo = 'Tenés un evento hoy ✦';
-  let url    = APP_BASE;
+  let url    = APP_URL;
   let evTag  = 'of-wp-' + Date.now();
 
   if (e.data) {
@@ -126,9 +102,6 @@ self.addEventListener('push', e => {
 });
 
 // ── TERCER NIVEL DE SEGURIDAD: verificación local ────────────────────────────
-// Se usa cuando el SW recibe los eventos desde la app (SCHEDULE_EVENTS)
-// y puede verificar por sí mismo si hay algo para hoy.
-// Es el respaldo definitivo si FCM y Web Push fallan.
 async function checkAndNotify() {
   try {
     const events = await dbGet('events');
@@ -155,7 +128,6 @@ async function checkAndNotify() {
       const fireKey = `${evId}-${now.getFullYear()}`;
       if (fired[fireKey]) continue;
 
-      // Verificar que tengamos permiso antes de intentar mostrar
       if (typeof Notification !== 'undefined' && Notification.permission !== 'granted') continue;
 
       await self.registration.showNotification('Oriente Fraterno 148', {
@@ -165,7 +137,7 @@ async function checkAndNotify() {
         tag:                `of-local-${evId}`,
         requireInteraction: true,
         vibrate:            [200, 100, 200, 100, 200],
-        data:               { url: APP_BASE },
+        data:               { url: APP_URL },
       });
       fired[fireKey] = true;
       changed = true;
@@ -177,7 +149,6 @@ async function checkAndNotify() {
   }
 }
 
-// ── Marcar eventos de hoy como ya notificados ─────────────────────────────────
 async function markFiredToday() {
   try {
     const events = await dbGet('events');
@@ -247,7 +218,6 @@ async function dbSet(key, value) {
 
 // ── Lifecycle ─────────────────────────────────────────────────────────────────
 self.addEventListener('install', e => {
-  console.log('[SW] Instalando', SW_VERSION);
   e.waitUntil(
     caches.open(CACHE_NAME)
       .then(cache => cache.addAll(PRECACHE_URLS).catch(err => console.warn('[SW] Pre-cache parcial:', err)))
@@ -256,7 +226,6 @@ self.addEventListener('install', e => {
 });
 
 self.addEventListener('activate', e => {
-  console.log('[SW] Activando', SW_VERSION);
   e.waitUntil(
     caches.keys()
       .then(keys => Promise.all(keys.filter(k => k !== CACHE_NAME).map(k => caches.delete(k))))
@@ -264,52 +233,29 @@ self.addEventListener('activate', e => {
   );
 });
 
-// ── Mensajes desde la app ─────────────────────────────────────────────────────
 self.addEventListener('message', async e => {
   if (!e.data) return;
-
   if (e.data.type === 'SCHEDULE_EVENTS') {
-    // Guardar los eventos en IDB para el fallback local
     await dbSet('events', e.data.events || []);
-    // Verificar si hay algo para hoy (tercer nivel de seguridad)
     await checkAndNotify();
   }
-
   if (e.data.type === 'CHECK_NOW') {
     await checkAndNotify();
   }
-
   if (e.data.type === 'PING') {
     e.source && e.source.postMessage({ type: 'PONG', version: SW_VERSION });
   }
-
   if (e.data.type === 'SKIP_WAITING') {
     self.skipWaiting();
   }
 });
 
-// ── Periodic Background Sync (Android Chrome, si el navegador lo soporta) ────
-self.addEventListener('periodicsync', e => {
-  if (e.tag === 'of-daily-check') {
-    console.log('[SW] Periodic sync disparado');
-    e.waitUntil(checkAndNotify());
-  }
-});
-
-// ── Background Sync estándar (al reconectar red) ──────────────────────────────
-self.addEventListener('sync', e => {
-  if (e.tag === 'of-check') {
-    console.log('[SW] Background sync disparado');
-    e.waitUntil(checkAndNotify());
-  }
-});
-
-// ── Fetch: Cache-First para recursos propios ──────────────────────────────────
+// ── Fetch ─────────────────────────────────────────────────────────────────────
 self.addEventListener('fetch', e => {
   if (e.request.method !== 'GET') return;
   const url = e.request.url;
 
-  if (url.startsWith(APP_BASE)) {
+  if (url.startsWith(APP_ROOT)) {
     e.respondWith(
       caches.match(e.request).then(cached => {
         if (cached) return cached;
@@ -319,7 +265,7 @@ self.addEventListener('fetch', e => {
           }
           return response;
         }).catch(() =>
-          caches.match(APP_BASE + 'index.html')
+          caches.match(APP_URL)
             .then(fb => fb || new Response('Sin conexión', { status: 503 }))
         );
       })
@@ -339,10 +285,10 @@ self.addEventListener('fetch', e => {
 // ── Clic en notificación ──────────────────────────────────────────────────────
 self.addEventListener('notificationclick', e => {
   e.notification.close();
-  const targetUrl = (e.notification.data && e.notification.data.url) || APP_BASE;
+  const targetUrl = (e.notification.data && e.notification.data.url) || APP_URL;
   e.waitUntil(
     self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(clients => {
-      const appClient = clients.find(c => c.url.startsWith(APP_BASE));
+      const appClient = clients.find(c => c.url.startsWith(APP_ROOT));
       if (appClient) return appClient.focus();
       return self.clients.openWindow(targetUrl);
     })
