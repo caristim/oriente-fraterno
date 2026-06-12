@@ -144,7 +144,7 @@ jobs:
                   data: {
                     title: titulo,
                     body:  cuerpo,
-                    url:   'https://caristim.github.io/oriente-fraterno/',
+                    url:   'https://caristim.github.io/oriente-fraterno/index.html',
                     tag:   tag
                   },
                   // Prioridad alta para Android Doze mode
@@ -201,7 +201,7 @@ jobs:
               const payload = JSON.stringify({
                 title: titulo,
                 body:  cuerpo,
-                url:   'https://caristim.github.io/oriente-fraterno/',
+                url:   'https://caristim.github.io/oriente-fraterno/index.html',
                 tag:   tag
               });
               await webpush.sendNotification(subscription, payload, {
