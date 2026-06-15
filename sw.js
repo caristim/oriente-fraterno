@@ -1,31 +1,26 @@
-// Oriente Fraterno 148 — Service Worker v19.0
-// CORRECCIONES v19.0:
-//  1. [CRÍTICO] Eliminado conflicto entre FCM onBackgroundMessage y push nativo:
-//     el listener 'push' ahora detecta si el payload viene de FCM y lo ignora
-//     para evitar duplicados, pero lo procesa si es Web Push puro (iOS/Firefox).
-//  2. [CRÍTICO] Eliminada verificación Notification.permission en el SW
-//     (el objeto Notification NO existe en el contexto del Service Worker).
-//  3. [CRÍTICO] Firebase SDK en el SW se inicializa con manejo defensivo
-//     para no bloquear el SW en Firefox/Safari que no tienen FCM.
-//  4. [CRÍTICO] El SW ahora es el único archivo necesario (elimina la necesidad
-//     de un firebase-messaging-sw.js separado) porque se pasa
-//     serviceWorkerRegistration explícito en getToken().
-//  5. Mejorado markFiredToday para evitar notificaciones duplicadas entre
-//     el canal FCM y el canal Web Push nativo.
-//  6. APP_URL corregida para no incluir /index.html en la URL de apertura
-//     (GitHub Pages redirige /oriente-fraterno/ correctamente).
+// Oriente Fraterno 148 — Service Worker v20.0
+// CORRECCIONES v20.0 sobre v19.0:
+//  1. [BUG-A] El listener 'push' nativo ahora identifica mensajes FCM
+//     por el campo 'from' del payload (= Firebase messagingSenderId)
+//     en lugar del mecanismo débil last_fcm_tag con race condition.
+//     Resultado: deduplicación fiable y sin condiciones de carrera.
+//  2. [BUG-B] Eliminado el almacenamiento de last_fcm_tag en IndexedDB
+//     (ya no es necesario, el mecanismo 'from' es síncrono y determinista).
+//  3. Comentarios técnicos actualizados para reflejar el comportamiento real
+//     de Firebase SDK compat v10 (stopImmediatePropagation en mensajes FCM).
 
 importScripts('https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js');
 importScripts('https://www.gstatic.com/firebasejs/10.8.0/firebase-messaging-compat.js');
 
-const SW_VERSION = 'of-sw-v19.0';
-const DB_NAME    = 'of_sw';
-const APP_ROOT   = 'https://caristim.github.io/oriente-fraterno/';
-const APP_URL    = 'https://caristim.github.io/oriente-fraterno/';
-const ICON_192   = 'https://caristim.github.io/oriente-fraterno/icon-192.png';
-const BADGE_URL  = 'https://caristim.github.io/oriente-fraterno/icon-192.png';
+const SW_VERSION        = 'of-sw-v20.0';
+const DB_NAME           = 'of_sw';
+const APP_ROOT          = 'https://caristim.github.io/oriente-fraterno/';
+const APP_URL           = 'https://caristim.github.io/oriente-fraterno/';
+const ICON_192          = 'https://caristim.github.io/oriente-fraterno/icon-192.png';
+const BADGE_URL         = 'https://caristim.github.io/oriente-fraterno/icon-192.png';
+const FCM_SENDER_ID     = '101867774014'; // messagingSenderId del proyecto Firebase
 
-const CACHE_NAME    = 'of-cache-v19.0';
+const CACHE_NAME    = 'of-cache-v20.0';
 const PRECACHE_URLS = [
   APP_ROOT,
   APP_ROOT + 'index.html',
@@ -34,7 +29,10 @@ const PRECACHE_URLS = [
   APP_ROOT + 'icon-512.png',
 ];
 
-// ── Inicialización Firebase (defensiva: falla silenciosamente en Firefox/Safari) ──
+// ── Inicialización Firebase ───────────────────────────────────────────────────
+// Defensiva: falla silenciosamente en Firefox/Safari (sin soporte FCM).
+// En esos navegadores, fcmMessaging queda null y el listener push nativo
+// se encarga de todo.
 let fcmMessaging   = null;
 let fcmInitialized = false;
 
@@ -42,7 +40,6 @@ function tryInitFirebase() {
   if (fcmInitialized) return;
   fcmInitialized = true;
   try {
-    // Evitar doble inicialización si ya existe una app
     const existingApps = firebase.apps || [];
     if (existingApps.length === 0) {
       firebase.initializeApp({
@@ -50,15 +47,14 @@ function tryInitFirebase() {
         authDomain:        'orientefraterno148-2a0c1.firebaseapp.com',
         projectId:         'orientefraterno148-2a0c1',
         storageBucket:     'orientefraterno148-2a0c1.firebasestorage.app',
-        messagingSenderId: '101867774014',
+        messagingSenderId: FCM_SENDER_ID,
         appId:             '1:101867774014:web:0b4bb797293910c419716f',
       });
     }
     fcmMessaging = firebase.messaging();
     console.log('[SW] Firebase + FCM inicializados correctamente.');
   } catch (err) {
-    // Firefox, Safari antiguo y otros navegadores sin soporte FCM
-    // fallarán aquí silenciosamente. El canal Web Push nativo seguirá funcionando.
+    // Normal en Firefox y Safari. El canal Web Push nativo funcionará.
     console.warn('[SW] Firebase no disponible (normal en Firefox/Safari):', err.message);
     fcmMessaging = null;
   }
@@ -66,22 +62,30 @@ function tryInitFirebase() {
 
 tryInitFirebase();
 
-// ── HANDLER FCM BACKGROUND ────────────────────────────────────────────────────
-// Se activa cuando el mensaje proviene de Firebase Cloud Messaging
-// en Android Chrome / Chrome Desktop / Edge Chromium con la app CERRADA.
-// USA payload data-only (sin "notification:{}") para máxima compatibilidad.
+// ── CANAL 1: FCM BACKGROUND (Chrome/Edge/Android con app CERRADA) ─────────────
+//
+// Firebase Messaging SDK compat v10:
+// - Instala su propio listener 'push' al cargarse via importScripts.
+// - Para mensajes FCM, llama stopImmediatePropagation() en el evento push,
+//   lo que IMPIDE que el listener nativo del usuario (más abajo) se ejecute.
+// - Llama onBackgroundMessage() con el payload decodificado.
+// - Firebase SDK envuelve el callback en event.waitUntil() internamente,
+//   garantizando que el SW no se termina antes de que showNotification complete.
+//
+// PAYLOAD: se usa data-only (sin campo "notification:{}").
+// Motivo: con "notification:{}" el sistema operativo muestra la notificación
+// automáticamente Y silencia onBackgroundMessage en muchos Android,
+// impidiendo personalización. Con data-only el SW siempre controla todo.
+//
 if (fcmMessaging) {
   fcmMessaging.onBackgroundMessage(async payload => {
-    console.log('[SW-FCM] onBackgroundMessage:', JSON.stringify(payload));
+    console.log('[SW-FCM] onBackgroundMessage recibido:', JSON.stringify(payload));
 
     const data   = payload.data || {};
     const titulo = data.title || 'Oriente Fraterno 148';
     const cuerpo = data.body  || 'Tenés un evento hoy ✦';
     const url    = data.url   || APP_URL;
     const evTag  = data.tag   || ('of-fcm-' + Date.now());
-
-    // Guardar el tag para que el listener 'push' no lo procese de nuevo
-    await dbSet('last_fcm_tag', evTag);
 
     await self.registration.showNotification(titulo, {
       body:               cuerpo,
@@ -97,11 +101,25 @@ if (fcmMessaging) {
   });
 }
 
-// ── HANDLER WEB PUSH NATIVO ───────────────────────────────────────────────────
-// Se activa para mensajes Web Push VAPID puros (iOS Safari PWA, Firefox, Edge).
-// NUNCA se activa para mensajes FCM cuando el SDK de Firebase está inicializado,
-// porque el SDK los intercepta primero y llama onBackgroundMessage en su lugar.
-// Por eso es seguro tener ambos handlers en el mismo archivo.
+// ── CANAL 2: WEB PUSH NATIVO (iOS Safari PWA, Firefox, Edge) ─────────────────
+//
+// Este listener maneja mensajes Web Push VAPID puros, que son los que
+// envía el workflow a la colección webpush_subscriptions.
+//
+// CUÁNDO SE EJECUTA:
+//   - iOS Safari PWA: SIEMPRE (Firebase SDK no corre en iOS Safari).
+//   - Firefox: SIEMPRE (Firebase SDK falla silenciosamente y fcmMessaging=null,
+//     por lo que Firebase no instala su listener y no hay stopImmediatePropagation).
+//   - Chrome/Edge: SOLO para mensajes Web Push puros de webpush_subscriptions.
+//     Los mensajes FCM son interceptados por Firebase SDK (ver arriba) y
+//     este listener nunca se ejecuta para ellos gracias a stopImmediatePropagation.
+//
+// IDENTIFICACIÓN FCM vs WEB PUSH PURO:
+//   Los mensajes FCM en Chrome incluyen el campo 'from' con el sender ID.
+//   Si por algún motivo el SDK NO intercepta el evento (p.ej. error de init),
+//   este listener detecta el campo 'from' y lo ignora para evitar duplicados.
+//   Esto elimina completamente la race condition del mecanismo last_fcm_tag.
+//
 self.addEventListener('push', e => {
   console.log('[SW-Push] Evento push nativo recibido');
 
@@ -109,49 +127,63 @@ self.addEventListener('push', e => {
   let cuerpo = 'Tenés un evento hoy ✦';
   let url    = APP_URL;
   let evTag  = 'of-wp-' + Date.now();
+  let isFCM  = false;
 
   if (e.data) {
     try {
       const data = e.data.json();
-      titulo = data.title || titulo;
-      cuerpo = data.body  || cuerpo;
-      url    = data.url   || url;
-      evTag  = data.tag   || evTag;
+
+      // Detectar si el mensaje proviene de FCM por el campo 'from'.
+      // FCM v1 API siempre incluye 'from' con el messagingSenderId.
+      // Los mensajes Web Push nativos NO tienen este campo.
+      if (data.from === FCM_SENDER_ID || data.from === String(FCM_SENDER_ID)) {
+        isFCM = true;
+        console.log('[SW-Push] Mensaje identificado como FCM por campo from= ' + data.from + '. Ignorando (FCM handler lo procesa).');
+      } else {
+        titulo = data.title || titulo;
+        cuerpo = data.body  || cuerpo;
+        url    = data.url   || url;
+        evTag  = data.tag   || evTag;
+      }
     } catch (_) {
+      // No es JSON: puede ser un ping de verificación o payload de texto plano
       const texto = e.data.text();
       if (texto) cuerpo = texto;
     }
   }
 
+  // Si el mensaje viene de FCM, ya fue manejado por onBackgroundMessage.
+  // Salimos sin hacer nada para evitar duplicados.
+  if (isFCM) return;
+
   e.waitUntil(
     (async () => {
-      // Verificar si este tag ya fue procesado por FCM (evitar duplicados
-      // en el caso improbable de que un dispositivo reciba ambos canales)
-      const lastFcmTag = await dbGet('last_fcm_tag');
-      if (lastFcmTag && lastFcmTag === evTag) {
-        console.log('[SW-Push] Notificación ya procesada por FCM, ignorando duplicado.');
-        return;
+      try {
+        await self.registration.showNotification(titulo, {
+          body:               cuerpo,
+          icon:               ICON_192,
+          badge:              BADGE_URL,
+          tag:                evTag,
+          requireInteraction: true,
+          vibrate:            [200, 100, 200, 100, 200],
+          data:               { url },
+        });
+        await markFiredToday();
+      } catch (err) {
+        console.error('[SW-Push] Error mostrando notificación:', err.message);
       }
-
-      await self.registration.showNotification(titulo, {
-        body:               cuerpo,
-        icon:               ICON_192,
-        badge:              BADGE_URL,
-        tag:                evTag,
-        requireInteraction: true,
-        vibrate:            [200, 100, 200, 100, 200],
-        data:               { url },
-      });
-      await markFiredToday();
     })()
   );
 });
 
-// ── VERIFICACIÓN LOCAL (tercer nivel de seguridad) ───────────────────────────
-// Se ejecuta cuando la app está abierta y el SW recibe mensaje SCHEDULE_EVENTS.
-// También sirve como respaldo si FCM y Web Push fallan en un dispositivo.
-// NOTA: self.registration.showNotification() SÍ funciona en SW aunque la app
-// esté en primer plano; el navegador decide si mostrarla o no según el foco.
+// ── CANAL 3: VERIFICACIÓN LOCAL (respaldo cuando el usuario abre la app) ──────
+//
+// Se ejecuta cuando la app envía SCHEDULE_EVENTS al SW.
+// Útil como respaldo si FCM/WebPush fallan, pero NO funciona con app cerrada.
+// No depende de permisos: showNotification() lanza excepción si el permiso
+// fue revocado, que el try/catch captura correctamente.
+// NOTA: Notification.permission NO existe en el contexto del SW.
+//
 async function checkAndNotify() {
   try {
     const events = await dbGet('events');
@@ -181,10 +213,6 @@ async function checkAndNotify() {
       const fireKey = `${evId}-${now.getFullYear()}`;
       if (fired[fireKey]) continue;
 
-      // CORRECCIÓN: Notification NO existe en el contexto del SW.
-      // La verificación de permisos la hace el navegador automáticamente
-      // al llamar showNotification(). Si el permiso fue revocado, simplemente
-      // lanza una excepción que capturamos con try/catch.
       try {
         await self.registration.showNotification('Oriente Fraterno 148', {
           body:               `Hoy: ${ev.tipo} de ${ev.nombre}`,
@@ -285,7 +313,9 @@ self.addEventListener('install', e => {
   console.log('[SW] Instalando versión:', SW_VERSION);
   e.waitUntil(
     caches.open(CACHE_NAME)
-      .then(cache => cache.addAll(PRECACHE_URLS).catch(err => console.warn('[SW] Pre-cache parcial:', err)))
+      .then(cache => cache.addAll(PRECACHE_URLS).catch(err =>
+        console.warn('[SW] Pre-cache parcial (sin conexión?):', err.message)
+      ))
       .then(() => self.skipWaiting())
   );
 });
@@ -346,7 +376,6 @@ self.addEventListener('fetch', e => {
     return;
   }
 
-  // Para recursos externos: network-first con fallback a caché
   e.respondWith(
     fetch(e.request).catch(() =>
       caches.match(e.request).then(cached =>
@@ -363,7 +392,6 @@ self.addEventListener('notificationclick', e => {
 
   e.waitUntil(
     self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(clients => {
-      // Buscar si ya hay una ventana abierta con la app
       const appClient = clients.find(c => c.url.startsWith(APP_ROOT));
       if (appClient) return appClient.focus();
       return self.clients.openWindow(targetUrl);
