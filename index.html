@@ -217,35 +217,81 @@
       }
     }
 
-    // ── Verificar y renovar token FCM al abrir la app ────────────────────
-    // CORRECCIÓN CRÍTICA: Los tokens FCM expiran. Esta función verifica
-    // si el token almacenado sigue siendo válido y lo renueva si es necesario.
+    // ── Verificar y renovar suscripciones al abrir la app ────────────────
+    // Se llama automáticamente al inicio si el usuario ya tiene permiso.
+    // Renueva tanto el token FCM (Chromium) como la suscripción Web Push
+    // (iOS/Firefox) para garantizar que Firestore siempre tiene datos válidos.
     async function verificarYRenovarToken(swReg) {
-      if (!isFCMCapable() || !db) return;
-      try {
-        const messaging = firebase.messaging();
-        const reg       = swReg || await navigator.serviceWorker.ready;
-        const nuevoToken = await messaging.getToken({
-          vapidKey:                 VAPID_PUBLIC_KEY,
-          serviceWorkerRegistration: reg,
-        });
-        if (!nuevoToken) return;
+      if (!db) return;
+      const reg = swReg || await navigator.serviceWorker.ready.catch(() => null);
+      if (!reg) return;
 
-        const tokenGuardado = localStorage.getItem('fcm_token');
-        if (nuevoToken !== tokenGuardado) {
-          console.log('[FCM] Token renovado automáticamente.');
-          if (tokenGuardado) {
-            try { await db.collection('fcm_tokens').doc(tokenGuardado).delete(); } catch(_) {}
-          }
-          await db.collection('fcm_tokens').doc(nuevoToken).set({
-            token:     nuevoToken,
-            platform:  'chromium',
-            updatedAt: new Date().toISOString(),
+      // ── Renovar token FCM (solo en navegadores Chromium) ──────────────
+      if (isFCMCapable()) {
+        try {
+          const messaging  = firebase.messaging();
+          const nuevoToken = await messaging.getToken({
+            vapidKey:                 VAPID_PUBLIC_KEY,
+            serviceWorkerRegistration: reg,
           });
-          localStorage.setItem('fcm_token', nuevoToken);
+          if (nuevoToken) {
+            const tokenGuardado = localStorage.getItem('fcm_token');
+            if (nuevoToken !== tokenGuardado) {
+              console.log('[FCM] Token renovado automáticamente.');
+              if (tokenGuardado) {
+                try { await db.collection('fcm_tokens').doc(tokenGuardado).delete(); } catch(_) {}
+              }
+              await db.collection('fcm_tokens').doc(nuevoToken).set({
+                token:     nuevoToken,
+                platform:  'chromium',
+                updatedAt: new Date().toISOString(),
+              });
+              localStorage.setItem('fcm_token', nuevoToken);
+            } else {
+              // Token igual: actualizar updatedAt para que el workflow sepa que sigue activo
+              await db.collection('fcm_tokens').doc(nuevoToken).set({
+                token:     nuevoToken,
+                platform:  'chromium',
+                updatedAt: new Date().toISOString(),
+              });
+            }
+          }
+        } catch (err) {
+          console.warn('[FCM] No se pudo renovar el token FCM:', err.message);
         }
-      } catch (err) {
-        console.warn('[FCM] No se pudo renovar el token:', err.message);
+      }
+
+      // ── Renovar suscripción Web Push (iOS/Firefox/todos los que la tienen) ──
+      // Aunque el usuario sea Chromium y use FCM como canal principal,
+      // también puede tener una suscripción Web Push de respaldo que hay
+      // que mantener actualizada en Firestore.
+      if ('PushManager' in window) {
+        try {
+          const sub = await reg.pushManager.getSubscription();
+          if (sub) {
+            // La suscripción existe: refrescarla en Firestore
+            const subJson  = sub.toJSON();
+            const endpoint = subJson.endpoint;
+            const p256dh   = subJson.keys && subJson.keys.p256dh;
+            const auth     = subJson.keys && subJson.keys.auth;
+            if (endpoint && p256dh && auth) {
+              const docId    = hashEndpoint(endpoint);
+              const platform = isIOSBrowser()     ? 'ios'
+                             : isFirefoxBrowser()  ? 'firefox'
+                             : 'chromium';
+              await db.collection('webpush_subscriptions').doc(docId).set({
+                endpoint,
+                p256dh,
+                auth,
+                platform,
+                updatedAt: new Date().toISOString(),
+              });
+              console.log('[WebPush] Suscripción refrescada en Firestore. Platform:', platform);
+            }
+          }
+        } catch (err) {
+          console.warn('[WebPush] No se pudo refrescar la suscripción:', err.message);
+        }
       }
     }
 
