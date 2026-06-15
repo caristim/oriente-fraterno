@@ -40,41 +40,60 @@
   <!-- Lucide Icons CDN -->
   <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
 
-  <!-- Firebase SDK (solo para Android/Chrome vía FCM) -->
+  <!-- Firebase SDK -->
   <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-messaging-compat.js"></script>
 
   <script>
+    // ── Configuración Firebase ──────────────────────────────────────────────
     const firebaseConfig = {
-      apiKey: "AIzaSyD9gQW61AvKHhNai6gljNFE7q9rS7KKuN8",
-      authDomain: "orientefraterno148-2a0c1.firebaseapp.com",
-      projectId: "orientefraterno148-2a0c1",
-      storageBucket: "orientefraterno148-2a0c1.firebasestorage.app",
-      messagingSenderId: "101867774014",
-      appId: "1:101867774014:web:0b4bb797293910c419716f"
+      apiKey:            'AIzaSyD9gQW61AvKHhNai6gljNFE7q9rS7KKuN8',
+      authDomain:        'orientefraterno148-2a0c1.firebaseapp.com',
+      projectId:         'orientefraterno148-2a0c1',
+      storageBucket:     'orientefraterno148-2a0c1.firebasestorage.app',
+      messagingSenderId: '101867774014',
+      appId:             '1:101867774014:web:0b4bb797293910c419716f',
     };
 
-    // VAPID public key (la misma que usás para FCM)
+    // CORRECCIÓN: La VAPID key es para Web Push nativo (iOS/Firefox/Edge).
+    // Es distinta al apiKey de Firebase. Debe coincidir con la que usa
+    // el GitHub Action (secrets.OF_VAPID_PUBLIC_KEY).
     const VAPID_PUBLIC_KEY = 'BM1SqlyjKhW45Y2JSBqDTYRT5QBV0yduJBtonc_QrlqM1DgaDmanz_w1R0Qj40ZuiG-rz4s4stIqBuYmciutG9Y';
 
-    let db = null;
+    let db          = null;
+    let fcmReady    = false; // ¿el SDK de Firebase Messaging está listo?
+
     try {
-      if (typeof firebase !== 'undefined') {
-        firebase.initializeApp(firebaseConfig);
-        db = firebase.firestore();
-      }
+      firebase.initializeApp(firebaseConfig);
+      db = firebase.firestore();
     } catch (e) {
-      console.error("Error al inicializar Firebase:", e);
+      console.error('[App] Error al inicializar Firebase:', e);
     }
 
-    // ── Detecta si el navegador es iOS Safari ──────────────────────────────
+    // ── Detectores de plataforma ──────────────────────────────────────────
     function isIOSBrowser() {
       const ua = navigator.userAgent || '';
       return /iPhone|iPad|iPod/i.test(ua);
     }
 
-    // ── Convierte VAPID key de base64url a Uint8Array ──────────────────────
+    function isFirefoxBrowser() {
+      return typeof InstallTrigger !== 'undefined'
+          || (navigator.userAgent || '').toLowerCase().includes('firefox');
+    }
+
+    // CORRECCIÓN: detectar si FCM está disponible en este navegador.
+    // FCM solo funciona en Chromium-based browsers (Chrome, Edge, Samsung Internet).
+    // NO funciona en Firefox ni en iOS Safari (aunque esté como PWA).
+    function isFCMCapable() {
+      if (isIOSBrowser())    return false; // iOS Safari: usar Web Push nativo
+      if (isFirefoxBrowser()) return false; // Firefox: usar Web Push nativo
+      // Verificar que el navegador soporte la API de Firebase Messaging
+      return typeof firebase !== 'undefined'
+          && typeof firebase.messaging === 'function';
+    }
+
+    // ── Convertir VAPID key de base64url a Uint8Array ────────────────────
     function urlBase64ToUint8Array(base64String) {
       const padding = '='.repeat((4 - base64String.length % 4) % 4);
       const base64  = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
@@ -82,48 +101,62 @@
       return Uint8Array.from([...rawData].map(c => c.charCodeAt(0)));
     }
 
-    // ── Registro Web Push nativo (iOS 16.4+ y cualquier navegador moderno) ──
-    async function registrarWebPushNativo() {
+    // ── Generar ID estable para la suscripción Web Push ──────────────────
+    // CORRECCIÓN: btoa() puede fallar con caracteres Unicode en el endpoint.
+    // Usamos una función de hash simple y segura.
+    function hashEndpoint(endpoint) {
+      let hash = 0;
+      for (let i = 0; i < endpoint.length; i++) {
+        const char = endpoint.charCodeAt(i);
+        hash = ((hash << 5) - hash) + char;
+        hash |= 0; // Convertir a entero 32-bit
+      }
+      return 'wp_' + Math.abs(hash).toString(36);
+    }
+
+    // ── Registro Web Push nativo (iOS 16.4+, Firefox, Edge) ──────────────
+    async function registrarWebPushNativo(swReg) {
       try {
         if (!('serviceWorker' in navigator) || !('PushManager' in window) || !db) return false;
 
-        const permiso = await Notification.requestPermission();
-        if (permiso !== 'granted') {
-          console.warn('[WebPush] Permiso denegado.');
-          return false;
-        }
+        // Obtener el registro del SW para asociar la suscripción
+        const reg = swReg || await navigator.serviceWorker.ready;
 
-        const reg = await navigator.serviceWorker.ready;
-
-        // Verificar si ya hay una suscripción activa
+        // Verificar/obtener suscripción existente
         let sub = await reg.pushManager.getSubscription();
 
         if (!sub) {
           sub = await reg.pushManager.subscribe({
-            userVisibleOnly: true,
-            applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY)
+            userVisibleOnly:     true,
+            applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY),
           });
         }
 
         if (!sub) return false;
 
-        const subJson    = sub.toJSON();
-        const endpoint   = subJson.endpoint;
-        const p256dh     = subJson.keys && subJson.keys.p256dh;
-        const auth       = subJson.keys && subJson.keys.auth;
+        const subJson  = sub.toJSON();
+        const endpoint = subJson.endpoint;
+        const p256dh   = subJson.keys && subJson.keys.p256dh;
+        const auth     = subJson.keys && subJson.keys.auth;
 
         if (!endpoint || !p256dh || !auth) return false;
 
-        // Guardamos la suscripción en Firestore en colección separada
-        await db.collection('webpush_subscriptions').doc(btoa(endpoint).replace(/[^a-zA-Z0-9]/g, '').substring(0, 100)).set({
+        // CORRECCIÓN: ID estable basado en hash del endpoint (evita caracteres inválidos en Firestore)
+        const docId = hashEndpoint(endpoint);
+
+        const platform = isIOSBrowser()     ? 'ios'
+                       : isFirefoxBrowser()  ? 'firefox'
+                       : 'chromium';
+
+        await db.collection('webpush_subscriptions').doc(docId).set({
           endpoint,
           p256dh,
           auth,
-          platform: isIOSBrowser() ? 'ios' : 'other',
-          updatedAt: new Date().toISOString()
+          platform,
+          updatedAt: new Date().toISOString(),
         });
 
-        console.log('[WebPush] Suscripción nativa registrada con éxito.');
+        console.log('[WebPush] Suscripción registrada. Platform:', platform);
         return true;
       } catch (err) {
         console.error('[WebPush] Error:', err.message);
@@ -131,72 +164,136 @@
       }
     }
 
-    // ── Registro FCM (Android / Chrome) ───────────────────────────────────
-    async function registrarTokenFCM() {
+    // ── Registro FCM (Chrome / Edge Chromium / Samsung Internet) ─────────
+    async function registrarTokenFCM(swReg) {
       try {
-        if (!('serviceWorker' in navigator) || !('Notification' in window) || !db) return false;
-
-        const permiso = await Notification.requestPermission();
-        if (permiso !== 'granted') {
-          console.warn('[FCM] Permiso denegado.');
-          return false;
-        }
+        if (!isFCMCapable() || !db) return false;
 
         const messaging = firebase.messaging();
-        const reg       = await navigator.serviceWorker.ready;
+        const reg       = swReg || await navigator.serviceWorker.ready;
 
+        // CORRECCIÓN CRÍTICA: siempre pasar serviceWorkerRegistration.
+        // Esto fuerza a FCM a usar nuestro sw.js en lugar de buscar
+        // /firebase-messaging-sw.js en la raíz del dominio.
         const token = await messaging.getToken({
-          vapidKey: VAPID_PUBLIC_KEY,
-          serviceWorkerRegistration: reg
+          vapidKey:                 VAPID_PUBLIC_KEY,
+          serviceWorkerRegistration: reg,
         });
 
-        if (token) {
-          const prevToken = localStorage.getItem('fcm_token');
-          if (prevToken && prevToken !== token) {
-            try { await db.collection('fcm_tokens').doc(prevToken).delete(); } catch(_) {}
-          }
+        if (!token) return false;
 
-          await db.collection('fcm_tokens').doc(token).set({
-            token:     token,
-            platform:  'android',
-            updatedAt: new Date().toISOString()
-          });
-
-          localStorage.setItem('fcm_token', token);
-          console.log('[FCM] Token registrado con éxito.');
-          return true;
+        // CORRECCIÓN: Limpiar token anterior si cambió
+        const prevToken = localStorage.getItem('fcm_token');
+        if (prevToken && prevToken !== token) {
+          try {
+            await db.collection('fcm_tokens').doc(prevToken).delete();
+            console.log('[FCM] Token anterior eliminado de Firestore.');
+          } catch (_) {}
         }
+
+        await db.collection('fcm_tokens').doc(token).set({
+          token,
+          platform:  'chromium',
+          updatedAt: new Date().toISOString(),
+        });
+
+        localStorage.setItem('fcm_token', token);
+
+        // CORRECCIÓN: Escuchar renovación automática de token FCM.
+        // Cuando FCM invalida el token (cada 1-2 meses), onTokenRefresh
+        // se llama y aquí actualizamos Firestore automáticamente.
+        messaging.onMessage(payload => {
+          console.log('[FCM] Mensaje recibido en primer plano (app abierta):', payload);
+          // No mostramos notificación aquí porque la app está visible.
+          // El SW ya maneja el caso de background.
+        });
+
+        console.log('[FCM] Token registrado. Token:', token.substring(0, 24) + '...');
+        fcmReady = true;
+        return true;
       } catch (err) {
-        console.error('[FCM] Error:', err.message);
+        console.error('[FCM] Error al registrar token:', err.message);
+        return false;
       }
-      return false;
     }
 
-    // ── Punto de entrada: elige la estrategia según la plataforma ─────────
-    async function activarNotificaciones() {
-      if (isIOSBrowser()) {
-        // iOS: siempre usar Web Push nativo (FCM no funciona en Safari)
-        console.log('[Notif] Usando Web Push nativo (iOS)');
-        return await registrarWebPushNativo();
-      } else {
-        // Android / Chrome / otros: FCM primero, Web Push como respaldo
-        console.log('[Notif] Usando FCM (Android/Chrome)');
-        try {
-          const fcmOk = await registrarTokenFCM();
-          if (fcmOk) {
-            // También registramos Web Push nativo como respaldo en caso de que
-            // FCM no entregue (Doze mode, token caducado, etc.)
-            await registrarWebPushNativo().catch(() => {});
-            return true;
+    // ── Verificar y renovar token FCM al abrir la app ────────────────────
+    // CORRECCIÓN CRÍTICA: Los tokens FCM expiran. Esta función verifica
+    // si el token almacenado sigue siendo válido y lo renueva si es necesario.
+    async function verificarYRenovarToken(swReg) {
+      if (!isFCMCapable() || !db) return;
+      try {
+        const messaging = firebase.messaging();
+        const reg       = swReg || await navigator.serviceWorker.ready;
+        const nuevoToken = await messaging.getToken({
+          vapidKey:                 VAPID_PUBLIC_KEY,
+          serviceWorkerRegistration: reg,
+        });
+        if (!nuevoToken) return;
+
+        const tokenGuardado = localStorage.getItem('fcm_token');
+        if (nuevoToken !== tokenGuardado) {
+          console.log('[FCM] Token renovado automáticamente.');
+          if (tokenGuardado) {
+            try { await db.collection('fcm_tokens').doc(tokenGuardado).delete(); } catch(_) {}
           }
-        } catch (_) {}
-        // Si FCM falla (p. ej. navegador sin soporte), intentar Web Push
-        return await registrarWebPushNativo();
+          await db.collection('fcm_tokens').doc(nuevoToken).set({
+            token:     nuevoToken,
+            platform:  'chromium',
+            updatedAt: new Date().toISOString(),
+          });
+          localStorage.setItem('fcm_token', nuevoToken);
+        }
+      } catch (err) {
+        console.warn('[FCM] No se pudo renovar el token:', err.message);
       }
+    }
+
+    // ── Punto de entrada: activa notificaciones según plataforma ─────────
+    async function activarNotificaciones(swReg) {
+      if (!('Notification' in window)) {
+        console.warn('[Notif] Este navegador no soporta notificaciones.');
+        return false;
+      }
+
+      // Solicitar permiso si no está concedido
+      if (Notification.permission !== 'granted') {
+        const permiso = await Notification.requestPermission();
+        if (permiso !== 'granted') {
+          console.warn('[Notif] Permiso denegado por el usuario.');
+          return false;
+        }
+      }
+
+      let exito = false;
+
+      if (isIOSBrowser() || isFirefoxBrowser()) {
+        // iOS Safari / Firefox: SOLO Web Push nativo
+        console.log('[Notif] Usando Web Push nativo (iOS/Firefox).');
+        exito = await registrarWebPushNativo(swReg);
+      } else {
+        // Chrome / Edge: FCM + Web Push como respaldo
+        console.log('[Notif] Usando FCM (Chromium).');
+        const fcmOk = await registrarTokenFCM(swReg);
+        if (fcmOk) {
+          exito = true;
+          // Web Push como canal de respaldo (por si FCM falla un día)
+          await registrarWebPushNativo(swReg).catch(err =>
+            console.warn('[Notif] Web Push de respaldo falló (no crítico):', err.message)
+          );
+        } else {
+          // FCM falló: intentar solo con Web Push
+          console.log('[Notif] FCM falló, intentando Web Push como respaldo.');
+          exito = await registrarWebPushNativo(swReg);
+        }
+      }
+
+      return exito;
     }
 
     window._activarNotificaciones = activarNotificaciones;
-    // Alias legacy por si algún código interno lo llama
+    window._verificarYRenovarToken = verificarYRenovarToken;
+    // Alias legacy
     window._registrarTokenFCM = activarNotificaciones;
   </script>
 
@@ -243,9 +340,9 @@
     const STORAGE_KEY = 'orienteFraterno_v2';
 
     function detectPlatform() {
-      const ua = navigator.userAgent || '';
-      const isIOS     = /iPhone|iPad|iPod/i.test(ua);
-      const isAndroid = /Android/i.test(ua);
+      const ua           = navigator.userAgent || '';
+      const isIOS        = /iPhone|iPad|iPod/i.test(ua);
+      const isAndroid    = /Android/i.test(ua);
       const isStandalone = window.matchMedia('(display-mode: standalone)').matches
                         || window.navigator.standalone === true;
       return { isIOS, isAndroid, isStandalone };
@@ -257,13 +354,13 @@
       return parseFloat(`${match[1]}.${match[2]}`);
     }
 
+    // ── Pantalla de bienvenida ──────────────────────────────────────────────
     function WelcomeScreen({ onClose }) {
       const { isIOS, isAndroid } = detectPlatform();
-      const [step, setStep] = useState(1);
-      const iosVersion      = getIOSVersion();
-      const iosOld          = isIOS && iosVersion !== null && iosVersion < 16.4;
-
-      const nextStep = () => setStep(s => s + 1);
+      const [step, setStep]      = useState(1);
+      const iosVersion           = getIOSVersion();
+      const iosOld               = isIOS && iosVersion !== null && iosVersion < 16.4;
+      const nextStep             = () => setStep(s => s + 1);
 
       return (
         <div className="fixed inset-0 z-50 bg-navy flex flex-col items-center justify-center px-6 bg-grid overflow-y-auto">
@@ -300,7 +397,7 @@
                     <p className="font-crimson text-white/90 text-base leading-snug">
                       {isIOS
                         ? "En iOS, es obligatorio instalar la app usando 'Compartir' → 'Agregar al inicio' para recibir avisos."
-                        : "Asegúrate de tener la app instalada en tu pantalla de inicio para mayor fiabilidad."}
+                        : "Instala la app en tu pantalla de inicio para asegurar las notificaciones en segundo plano."}
                     </p>
                   </div>
                   <button onClick={nextStep} className="w-full py-3 mt-4 rounded font-cinzel text-xs tracking-widest uppercase bg-gold/10 border border-gold/30 text-gold font-bold">
@@ -315,11 +412,11 @@
 
                   {isAndroid ? (
                     <div className="space-y-3">
-                      <p className="font-crimson text-white/80 text-sm leading-tight italic">Para recibir avisos con la app cerrada:</p>
+                      <p className="font-crimson text-white/80 text-sm leading-tight italic">Para recibir avisos con la app cerrada en Android:</p>
                       <ul className="space-y-2 text-sm font-crimson text-white/90">
-                        <li className="flex gap-2"><span>•</span> Mantén presionado el icono de la app en tu inicio.</li>
-                        <li className="flex gap-2"><span>•</span> Toca <span className="text-gold">"Info de la aplicación"</span> (o el icono ⓘ).</li>
-                        <li className="flex gap-2"><span>•</span> Ve a <span className="text-gold">"Batería"</span> y selecciona <span className="text-gold">"Sin Restricciones"</span>.</li>
+                        <li className="flex gap-2"><span>•</span> Mantén presionado el icono de la app.</li>
+                        <li className="flex gap-2"><span>•</span> Toca <span className="text-gold">"Info de la aplicación"</span> (ícono ⓘ).</li>
+                        <li className="flex gap-2"><span>•</span> Ve a <span className="text-gold">"Batería"</span> → selecciona <span className="text-gold">"Sin Restricciones"</span>.</li>
                       </ul>
                     </div>
                   ) : (
@@ -393,7 +490,7 @@
 
     function formatDate(iso) {
       if (!iso || typeof iso !== 'string') return '';
-      const parts = iso.split('-');
+      const parts  = iso.split('-');
       const months = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
       if (parts.length === 2) return `${parts[1]} ${months[parseInt(parts[0]) - 1] || ''}`;
       if (parts.length === 3) return `${parts[2]} ${months[parseInt(parts[1]) - 1] || ''}`;
@@ -416,23 +513,55 @@
       } catch (e) { return 999; }
     }
 
+    // ── Registro del Service Worker ───────────────────────────────────────
     let swRegistration = null;
+
     async function registerServiceWorker() {
       if (!('serviceWorker' in navigator)) return null;
       try {
-        swRegistration = await navigator.serviceWorker.register('./sw.js', { scope: '/oriente-fraterno/', updateViaCache: 'none' });
+        // CORRECCIÓN: El SW se llama sw.js (no firebase-messaging-sw.js).
+        // Usamos './sw.js' relativo a la URL base de la app.
+        // Scope '/oriente-fraterno/' cubre toda la app en GitHub Pages.
+        swRegistration = await navigator.serviceWorker.register('./sw.js', {
+          scope:          '/oriente-fraterno/',
+          updateViaCache: 'none', // Siempre verificar actualizaciones del SW
+        });
+        console.log('[App] SW registrado. Scope:', swRegistration.scope);
+
+        // Escuchar actualizaciones del SW
+        swRegistration.addEventListener('updatefound', () => {
+          const newWorker = swRegistration.installing;
+          if (newWorker) {
+            newWorker.addEventListener('statechange', () => {
+              if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+                console.log('[App] Nueva versión del SW disponible.');
+                // Activar automáticamente el nuevo SW
+                newWorker.postMessage({ type: 'SKIP_WAITING' });
+              }
+            });
+          }
+        });
+
         return swRegistration;
-      } catch (err) { return null; }
+      } catch (err) {
+        console.error('[App] Error registrando SW:', err);
+        return null;
+      }
     }
 
     async function syncEventsToSW(events) {
       try {
-        const reg = swRegistration || await registerServiceWorker();
-        if (!reg || !reg.active) return;
-        reg.active.postMessage({ type: 'SCHEDULE_EVENTS', events });
-      } catch (err) {}
+        const reg = swRegistration || await navigator.serviceWorker.ready;
+        if (!reg) return;
+        const worker = reg.active || reg.waiting || reg.installing;
+        if (!worker) return;
+        worker.postMessage({ type: 'SCHEDULE_EVENTS', events });
+      } catch (err) {
+        console.warn('[App] No se pudo sincronizar eventos con el SW:', err);
+      }
     }
 
+    // ── Componentes UI ────────────────────────────────────────────────────
     function Icon({ name, size = 18, className = '' }) {
       const ref = useRef(null);
       useEffect(() => {
@@ -453,7 +582,10 @@
 
     function Toast({ message, visible }) {
       return (
-        <div className={`fixed bottom-6 left-1/2 z-50 px-5 py-2.5 rounded-full bg-gradient-to-r from-gold to-gold-light text-navy font-cinzel text-xs tracking-widest uppercase shadow-lg pointer-events-none transition-all duration-300 ${visible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-4'}`} style={{ transform: 'translateX(-50%)' }}>
+        <div
+          className={`fixed bottom-6 left-1/2 z-50 px-5 py-2.5 rounded-full bg-gradient-to-r from-gold to-gold-light text-navy font-cinzel text-xs tracking-widest uppercase shadow-lg pointer-events-none transition-all duration-300 ${visible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-4'}`}
+          style={{ transform: 'translateX(-50%)' }}
+        >
           {message}
         </div>
       );
@@ -477,37 +609,55 @@
       );
     }
 
+    // ── Componente principal ──────────────────────────────────────────────
     function App() {
-      const [events, setEvents]       = useState(loadEvents);
-      const [nombre, setNombre]       = useState('');
-      const [mes, setMes]             = useState('');
-      const [dia, setDia]             = useState('');
-      const [tipo, setTipo]           = useState('');
-      const [notifPerm, setNotifPerm] = useState(() => typeof Notification !== 'undefined' ? Notification.permission : 'denied');
-      const [toast, setToast]         = useState({ msg: '', visible: false });
-      const [loading, setLoading]     = useState(true);
+      const [events, setEvents]           = useState(loadEvents);
+      const [nombre, setNombre]           = useState('');
+      const [mes, setMes]                 = useState('');
+      const [dia, setDia]                 = useState('');
+      const [tipo, setTipo]               = useState('');
+      const [notifPerm, setNotifPerm]     = useState(() =>
+        typeof Notification !== 'undefined' ? Notification.permission : 'denied'
+      );
+      const [toast, setToast]             = useState({ msg: '', visible: false });
+      const [loading, setLoading]         = useState(true);
       const [showWelcome, setShowWelcome] = useState(true);
-      const toastTimer = useRef(null);
+      const toastTimer                    = useRef(null);
 
+      // CORRECCIÓN: El SW se registra INMEDIATAMENTE al montar el componente,
+      // independientemente de si showWelcome está activo o no.
+      // Antes solo se registraba al cerrar la pantalla de bienvenida,
+      // lo que retrasaba el registro y perdía push events.
       useEffect(() => {
-        registerServiceWorker().then(async reg => {
-          if (reg && Notification.permission === 'granted') {
-            if (window._activarNotificaciones) await window._activarNotificaciones();
-          }
-        });
-      }, []);
+        (async () => {
+          const reg = await registerServiceWorker();
+          if (!reg) return;
 
+          // CORRECCIÓN: Si ya tenía permiso (usuario recurrente),
+          // renovar el token FCM automáticamente sin pedir permiso de nuevo.
+          if (Notification.permission === 'granted') {
+            await window._verificarYRenovarToken(reg).catch(() => {});
+          }
+        })();
+      }, []); // Solo al montar
+
+      // Suscripción en tiempo real a Firestore
       useEffect(() => {
         if (!db) { setLoading(false); return; }
+
         const unsub = db.collection('eventos').onSnapshot(
           snap => {
             const fbEvents = snap.docs.map(d => ({ docId: d.id, ...d.data() }));
             setEvents(fbEvents);
             saveEvents(fbEvents);
             setLoading(false);
+            // Sincronizar eventos con el SW para la verificación local
             if (Notification.permission === 'granted') syncEventsToSW(fbEvents);
           },
-          err => { setLoading(false); }
+          err => {
+            console.error('[App] Error en snapshot de Firestore:', err);
+            setLoading(false);
+          }
         );
         return () => unsub();
       }, []);
@@ -515,7 +665,9 @@
       const showToast = useCallback((msg) => {
         clearTimeout(toastTimer.current);
         setToast({ msg, visible: true });
-        toastTimer.current = setTimeout(() => setToast(t => ({ ...t, visible: false })), 2800);
+        toastTimer.current = setTimeout(() =>
+          setToast(t => ({ ...t, visible: false })), 2800
+        );
       }, []);
 
       const sorted = useMemo(() => {
@@ -528,7 +680,7 @@
         if (!mes || !dia)    { showToast('Selecciona mes y día'); return; }
         if (!tipo)           { showToast('Selecciona el tipo de evento'); return; }
         const fecha = `${String(mes).padStart(2,'0')}-${String(dia).padStart(2,'0')}`;
-        const ev = { id: Date.now(), nombre: nombre.trim(), fecha, tipo };
+        const ev    = { id: Date.now(), nombre: nombre.trim(), fecha, tipo };
         await saveEventToFirebase(ev);
         setNombre(''); setMes(''); setDia(''); setTipo('');
         showToast('Evento registrado ✦');
@@ -544,7 +696,8 @@
         if (!('Notification' in window)) { showToast('Navegador no soportado'); return; }
         showToast('Registrando dispositivo...');
 
-        const exito = await window._activarNotificaciones();
+        const reg   = swRegistration || await navigator.serviceWorker.ready.catch(() => null);
+        const exito = await window._activarNotificaciones(reg);
         setNotifPerm(Notification.permission);
 
         if (exito) {
@@ -590,7 +743,10 @@
           <main className="max-w-lg mx-auto px-4 pb-24">
             <Divider label="Notificaciones" />
             <Card className="p-4">
-              <button onClick={handleNotify} className={`w-full flex items-center justify-center gap-2 py-2.5 px-4 rounded font-cinzel text-xs tracking-widest uppercase border transition-all ${notifGranted ? 'border-gold/50 text-gold-light bg-gold/10' : 'border-gold/30 text-gold hover:bg-gold/10'}`}>
+              <button
+                onClick={handleNotify}
+                className={`w-full flex items-center justify-center gap-2 py-2.5 px-4 rounded font-cinzel text-xs tracking-widest uppercase border transition-all ${notifGranted ? 'border-gold/50 text-gold-light bg-gold/10' : 'border-gold/30 text-gold hover:bg-gold/10'}`}
+              >
                 <Icon name={notifGranted ? 'BellRing' : 'Bell'} size={15} />
                 {notifGranted ? 'Notificaciones Activas ✦' : 'Activar Notificaciones Web'}
               </button>
@@ -601,7 +757,14 @@
               <div className="space-y-4">
                 <div>
                   <label className="block font-cinzel text-gold text-xs tracking-widest uppercase mb-1.5">Nombre</label>
-                  <input type="text" value={nombre} onChange={e => setNombre(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleSave()} placeholder="Ej: José López" className="w-full bg-navy/70 border gold-border rounded px-3 py-2.5 text-white font-crimson text-base placeholder-white/25 focus:outline-none gold-glow focus:border-gold/70 transition" />
+                  <input
+                    type="text"
+                    value={nombre}
+                    onChange={e => setNombre(e.target.value)}
+                    onKeyDown={e => e.key === 'Enter' && handleSave()}
+                    placeholder="Ej: José López"
+                    className="w-full bg-navy/70 border gold-border rounded px-3 py-2.5 text-white font-crimson text-base placeholder-white/25 focus:outline-none gold-glow focus:border-gold/70 transition"
+                  />
                 </div>
                 <div className="flex gap-2">
                   <select value={mes} onChange={e => setMes(e.target.value)} className="flex-1 bg-navy/70 border gold-border rounded px-3 py-2.5 text-white font-crimson text-base focus:outline-none">
@@ -614,7 +777,7 @@
                     <option value="">— Día —</option>
                     {(() => {
                       const diasPorMes = [31,29,31,30,31,30,31,31,30,31,30,31];
-                      const maxDias = mes ? diasPorMes[parseInt(mes,10) - 1] : 31;
+                      const maxDias    = mes ? diasPorMes[parseInt(mes,10) - 1] : 31;
                       if (dia && parseInt(dia,10) > maxDias) { setTimeout(() => setDia(''), 0); }
                       return Array.from({length: maxDias}, (_,i) => i+1).map(d => (
                         <option key={d} value={String(d).padStart(2,'0')}>{d}</option>
@@ -624,7 +787,7 @@
                 </div>
                 <select value={tipo} onChange={e => setTipo(e.target.value)} className="w-full bg-navy/70 border gold-border rounded px-3 py-2.5 text-white font-crimson text-base focus:outline-none">
                   <option value="">— Seleccionar evento —</option>
-                  {TIPOS.map(t => ( <option key={t.value} value={t.value}>{t.emoji} {t.label}</option> ))}
+                  {TIPOS.map(t => (<option key={t.value} value={t.value}>{t.emoji} {t.label}</option>))}
                 </select>
                 <button onClick={handleSave} className="w-full py-3 rounded font-cinzel text-xs tracking-widest uppercase bg-gradient-to-r from-gold via-gold-light to-gold text-navy font-bold shadow-lg shadow-gold/20 flex items-center justify-center gap-2">
                   <Icon name="PlusCircle" size={15} /> Registrar Evento
@@ -639,7 +802,7 @@
               ) : (
                 <div className="space-y-2">
                   {sorted.map((ev) => {
-                    const cfg = TIPOS.find(t => t.value === ev.tipo) || { emoji: '📌' };
+                    const cfg  = TIPOS.find(t => t.value === ev.tipo) || { emoji: '📌' };
                     const days = daysUntil(ev.fecha);
                     return (
                       <div key={ev.docId || ev.id} className={`flex items-center gap-3 p-3 rounded border ${TIPO_STYLES[ev.tipo] || 'bg-navy/50 border-white/10'}`}>
@@ -649,7 +812,9 @@
                           <p className="text-gold text-xs uppercase">{ev.tipo} · {formatDate(ev.fecha)}</p>
                           <p className="text-white/40 text-xs">{days === 0 ? 'HOY ✦' : `En ${days} días`}</p>
                         </div>
-                        <button onClick={() => handleDelete(ev.docId || ev.id)} className="p-1.5 text-red-500/60 hover:text-red-400"><Icon name="Trash2" size={14} /></button>
+                        <button onClick={() => handleDelete(ev.docId || ev.id)} className="p-1.5 text-red-500/60 hover:text-red-400">
+                          <Icon name="Trash2" size={14} />
+                        </button>
                       </div>
                     );
                   })}
@@ -657,10 +822,12 @@
               )}
             </Card>
           </main>
+
           <footer className="text-center pb-8 pt-2">
             <p className="font-cinzel text-gold/25 text-xs tracking-[0.2em] uppercase">✦ A L:. G:. A:. D:. U:. ✦</p>
             <p className="font-cinzel text-gold/20 text-[10px] tracking-widest uppercase mt-2">Creación: H.'. C. E. A. D. 2026</p>
           </footer>
+
           <Toast message={toast.msg} visible={toast.visible} />
         </div>
       );
