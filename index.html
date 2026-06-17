@@ -7,197 +7,203 @@
   <meta name="theme-color" content="#0f172a" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-title" content="Oriente Fraterno" />
-
-  <!-- PWA Manifest -->
   <link rel="manifest" href="./manifest.json" />
 
-  <!-- Tailwind CSS CDN -->
+  <!-- Tailwind CSS -->
   <script src="https://cdn.tailwindcss.com"></script>
   <script>
     tailwind.config = {
-      theme: {
-        extend: {
-          colors: {
-            navy:    { DEFAULT: '#0f172a', mid: '#1e2d4a', light: '#243660' },
-            gold:    { DEFAULT: '#c9a84c', light: '#e8c96a', pale: '#f5e8b8', dim: '#7a6128' },
-          },
-          fontFamily: {
-            cinzel:  ['Cinzel', 'serif'],
-            crimson: ['"Crimson Pro"', 'Georgia', 'serif'],
-          },
-        }
-      }
+      theme: { extend: {
+        colors: {
+          navy: { DEFAULT:'#0f172a', mid:'#1e2d4a', light:'#243660' },
+          gold: { DEFAULT:'#c9a84c', light:'#e8c96a', pale:'#f5e8b8', dim:'#7a6128' },
+        },
+        fontFamily: {
+          cinzel:  ['Cinzel','serif'],
+          crimson: ['"Crimson Pro"','Georgia','serif'],
+        },
+      }}
     }
   </script>
 
-  <!-- React + ReactDOM CDN -->
+  <!-- React + Babel -->
   <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-
-  <!-- Babel (JSX transpiler) -->
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 
-  <!-- Lucide Icons CDN -->
-  <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
+  <!-- Lucide Icons -->
+  <script src="https://unpkg.com/lucide@0.383.0/dist/umd/lucide.min.js"></script>
 
-  <!-- Firebase SDK (solo para Android/Chrome vía FCM) -->
+  <!-- Firebase SDK -->
   <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-messaging-compat.js"></script>
 
+  <!-- ── Lógica de notificaciones + Firebase ─────────────────────────────── -->
   <script>
+    // ── Configuración Firebase ────────────────────────────────────────────
     const firebaseConfig = {
-      apiKey: "AIzaSyD9gQW61AvKHhNai6gljNFE7q9rS7KKuN8",
-      authDomain: "orientefraterno148-2a0c1.firebaseapp.com",
-      projectId: "orientefraterno148-2a0c1",
-      storageBucket: "orientefraterno148-2a0c1.firebasestorage.app",
-      messagingSenderId: "101867774014",
-      appId: "1:101867774014:web:0b4bb797293910c419716f"
+      apiKey:            'AIzaSyD9gQW61AvKHhNai6gljNFE7q9rS7KKuN8',
+      authDomain:        'orientefraterno148-2a0c1.firebaseapp.com',
+      projectId:         'orientefraterno148-2a0c1',
+      storageBucket:     'orientefraterno148-2a0c1.firebasestorage.app',
+      messagingSenderId: '101867774014',
+      appId:             '1:101867774014:web:0b4bb797293910c419716f',
     };
 
-    // VAPID public key (la misma que usás para FCM)
+    // Clave pública VAPID — debe coincidir con OF_VAPID_PUBLIC_KEY en GitHub Secrets
     const VAPID_PUBLIC_KEY = 'BM1SqlyjKhW45Y2JSBqDTYRT5QBV0yduJBtonc_QrlqM1DgaDmanz_w1R0Qj40ZuiG-rz4s4stIqBuYmciutG9Y';
 
     let db = null;
     try {
-      if (typeof firebase !== 'undefined') {
-        firebase.initializeApp(firebaseConfig);
-        db = firebase.firestore();
-      }
+      firebase.initializeApp(firebaseConfig);
+      db = firebase.firestore();
+      console.log('[App] Firebase inicializado.');
     } catch (e) {
-      console.error("Error al inicializar Firebase:", e);
+      console.error('[App] Error inicializando Firebase:', e.message);
     }
 
-    // ── Detecta si el navegador es iOS Safari ──────────────────────────────
-    function isIOSBrowser() {
-      const ua = navigator.userAgent || '';
-      return /iPhone|iPad|iPod/i.test(ua);
+    // ── Detectores de plataforma ──────────────────────────────────────────
+    function isIOS()     { return /iPhone|iPad|iPod/i.test(navigator.userAgent); }
+    function isFirefox() { return /firefox/i.test(navigator.userAgent); }
+    function isFCMCapable() {
+      return !isIOS() && !isFirefox()
+          && typeof firebase !== 'undefined'
+          && typeof firebase.messaging === 'function';
     }
 
-    // ── Convierte VAPID key de base64url a Uint8Array ──────────────────────
-    function urlBase64ToUint8Array(base64String) {
-      const padding = '='.repeat((4 - base64String.length % 4) % 4);
-      const base64  = (base64String + padding).replace(/-/g, '+').replace(/_/g, '/');
-      const rawData = atob(base64);
-      return Uint8Array.from([...rawData].map(c => c.charCodeAt(0)));
+    // ── VAPID key → Uint8Array ────────────────────────────────────────────
+    function urlBase64ToUint8Array(b64) {
+      const pad  = '='.repeat((4 - b64.length % 4) % 4);
+      const base = (b64 + pad).replace(/-/g, '+').replace(/_/g, '/');
+      return Uint8Array.from(atob(base), c => c.charCodeAt(0));
     }
 
-    // ── Registro Web Push nativo (iOS 16.4+ y cualquier navegador moderno) ──
-    async function registrarWebPushNativo() {
+    // ── Hash estable del endpoint (evita btoa() con chars inválidos) ──────
+    function hashEndpoint(ep) {
+      let h = 0;
+      for (let i = 0; i < ep.length; i++) { h = Math.imul(31, h) + ep.charCodeAt(i) | 0; }
+      return 'wp_' + Math.abs(h).toString(36);
+    }
+
+    // ── Registrar suscripción Web Push (iOS / Firefox / respaldo Chromium) 
+    async function registrarWebPush(reg) {
       try {
-        if (!('serviceWorker' in navigator) || !('PushManager' in window) || !db) return false;
-
-        const permiso = await Notification.requestPermission();
-        if (permiso !== 'granted') {
-          console.warn('[WebPush] Permiso denegado.');
-          return false;
-        }
-
-        const reg = await navigator.serviceWorker.ready;
-
-        // Verificar si ya hay una suscripción activa
+        if (!('PushManager' in window) || !db) return false;
         let sub = await reg.pushManager.getSubscription();
-
         if (!sub) {
           sub = await reg.pushManager.subscribe({
-            userVisibleOnly: true,
-            applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY)
+            userVisibleOnly:      true,
+            applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY),
           });
         }
-
         if (!sub) return false;
-
-        const subJson    = sub.toJSON();
-        const endpoint   = subJson.endpoint;
-        const p256dh     = subJson.keys && subJson.keys.p256dh;
-        const auth       = subJson.keys && subJson.keys.auth;
-
-        if (!endpoint || !p256dh || !auth) return false;
-
-        // Guardamos la suscripción en Firestore en colección separada
-        await db.collection('webpush_subscriptions').doc(btoa(endpoint).replace(/[^a-zA-Z0-9]/g, '').substring(0, 100)).set({
-          endpoint,
-          p256dh,
-          auth,
-          platform: isIOSBrowser() ? 'ios' : 'other',
-          updatedAt: new Date().toISOString()
+        const j = sub.toJSON();
+        if (!j.endpoint || !j.keys?.p256dh || !j.keys?.auth) return false;
+        const platform = isIOS() ? 'ios' : isFirefox() ? 'firefox' : 'chromium';
+        await db.collection('webpush_subscriptions').doc(hashEndpoint(j.endpoint)).set({
+          endpoint:  j.endpoint,
+          p256dh:    j.keys.p256dh,
+          auth:      j.keys.auth,
+          platform,
+          updatedAt: new Date().toISOString(),
         });
-
-        console.log('[WebPush] Suscripción nativa registrada con éxito.');
+        console.log('[WebPush] Suscripción guardada. Platform:', platform);
         return true;
-      } catch (err) {
-        console.error('[WebPush] Error:', err.message);
+      } catch (e) {
+        console.error('[WebPush] Error:', e.message);
         return false;
       }
     }
 
-    // ── Registro FCM (Android / Chrome) ───────────────────────────────────
-    async function registrarTokenFCM() {
+    // ── Registrar token FCM (Chrome / Edge Chromium) ──────────────────────
+    async function registrarFCM(reg) {
       try {
-        if (!('serviceWorker' in navigator) || !('Notification' in window) || !db) return false;
-
-        const permiso = await Notification.requestPermission();
-        if (permiso !== 'granted') {
-          console.warn('[FCM] Permiso denegado.');
-          return false;
-        }
-
+        if (!isFCMCapable() || !db) return false;
         const messaging = firebase.messaging();
-        const reg       = await navigator.serviceWorker.ready;
-
         const token = await messaging.getToken({
-          vapidKey: VAPID_PUBLIC_KEY,
-          serviceWorkerRegistration: reg
+          vapidKey:                 VAPID_PUBLIC_KEY,
+          serviceWorkerRegistration: reg,
         });
-
-        if (token) {
-          const prevToken = localStorage.getItem('fcm_token');
-          if (prevToken && prevToken !== token) {
-            try { await db.collection('fcm_tokens').doc(prevToken).delete(); } catch(_) {}
-          }
-
-          await db.collection('fcm_tokens').doc(token).set({
-            token:     token,
-            platform:  'android',
-            updatedAt: new Date().toISOString()
-          });
-
-          localStorage.setItem('fcm_token', token);
-          console.log('[FCM] Token registrado con éxito.');
-          return true;
+        if (!token) return false;
+        const prev = localStorage.getItem('fcm_token');
+        if (prev && prev !== token) {
+          try { await db.collection('fcm_tokens').doc(prev).delete(); } catch(_) {}
         }
-      } catch (err) {
-        console.error('[FCM] Error:', err.message);
+        await db.collection('fcm_tokens').doc(token).set({
+          token, platform: 'chromium', updatedAt: new Date().toISOString(),
+        });
+        localStorage.setItem('fcm_token', token);
+        console.log('[FCM] Token registrado:', token.substring(0, 20) + '...');
+        return true;
+      } catch (e) {
+        console.error('[FCM] Error:', e.message);
+        return false;
       }
-      return false;
     }
 
-    // ── Punto de entrada: elige la estrategia según la plataforma ─────────
-    async function activarNotificaciones() {
-      if (isIOSBrowser()) {
-        // iOS: siempre usar Web Push nativo (FCM no funciona en Safari)
-        console.log('[Notif] Usando Web Push nativo (iOS)');
-        return await registrarWebPushNativo();
-      } else {
-        // Android / Chrome / otros: FCM primero, Web Push como respaldo
-        console.log('[Notif] Usando FCM (Android/Chrome)');
+    // ── Renovar token/suscripción al abrir la app (usuario recurrente) ────
+    async function renovarRegistros(reg) {
+      if (!db) return;
+      // Renovar token FCM
+      if (isFCMCapable()) {
         try {
-          const fcmOk = await registrarTokenFCM();
-          if (fcmOk) {
-            // También registramos Web Push nativo como respaldo en caso de que
-            // FCM no entregue (Doze mode, token caducado, etc.)
-            await registrarWebPushNativo().catch(() => {});
-            return true;
+          const messaging = firebase.messaging();
+          const token = await messaging.getToken({
+            vapidKey: VAPID_PUBLIC_KEY, serviceWorkerRegistration: reg,
+          });
+          if (token) {
+            const prev = localStorage.getItem('fcm_token');
+            if (prev && prev !== token) {
+              try { await db.collection('fcm_tokens').doc(prev).delete(); } catch(_) {}
+            }
+            await db.collection('fcm_tokens').doc(token).set({
+              token, platform: 'chromium', updatedAt: new Date().toISOString(),
+            });
+            localStorage.setItem('fcm_token', token);
+            console.log('[FCM] Token renovado/actualizado.');
           }
-        } catch (_) {}
-        // Si FCM falla (p. ej. navegador sin soporte), intentar Web Push
-        return await registrarWebPushNativo();
+        } catch(e) { console.warn('[FCM] No se pudo renovar:', e.message); }
       }
+      // Renovar suscripción Web Push
+      if ('PushManager' in window) {
+        try {
+          const sub = await reg.pushManager.getSubscription();
+          if (sub) {
+            const j = sub.toJSON();
+            if (j.endpoint && j.keys?.p256dh && j.keys?.auth) {
+              const platform = isIOS() ? 'ios' : isFirefox() ? 'firefox' : 'chromium';
+              await db.collection('webpush_subscriptions').doc(hashEndpoint(j.endpoint)).set({
+                endpoint: j.endpoint, p256dh: j.keys.p256dh, auth: j.keys.auth,
+                platform, updatedAt: new Date().toISOString(),
+              });
+              console.log('[WebPush] Suscripción renovada. Platform:', platform);
+            }
+          }
+        } catch(e) { console.warn('[WebPush] No se pudo renovar:', e.message); }
+      }
+    }
+
+    // ── Activar notificaciones (llamado al pulsar el botón) ───────────────
+    async function activarNotificaciones(reg) {
+      if (!('Notification' in window)) return false;
+      if (Notification.permission !== 'granted') {
+        const p = await Notification.requestPermission();
+        if (p !== 'granted') return false;
+      }
+      let ok = false;
+      if (isIOS() || isFirefox()) {
+        ok = await registrarWebPush(reg);
+      } else {
+        ok = await registrarFCM(reg);
+        if (ok) registrarWebPush(reg).catch(() => {}); // respaldo silencioso
+        else ok = await registrarWebPush(reg);
+      }
+      return ok;
     }
 
     window._activarNotificaciones = activarNotificaciones;
-    // Alias legacy por si algún código interno lo llama
-    window._registrarTokenFCM = activarNotificaciones;
+    window._renovarRegistros      = renovarRegistros;
   </script>
 
   <!-- Google Fonts -->
@@ -205,36 +211,28 @@
   <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Crimson+Pro:ital,wght@0,300;0,400;1,300&display=swap" rel="stylesheet" />
 
   <style>
-    body { font-family: 'Crimson Pro', Georgia, serif; }
-    input[type="date"]::-webkit-calendar-picker-indicator { filter: invert(0.7) sepia(1) saturate(2) hue-rotate(5deg); cursor: pointer; }
-    select option { background: #1e2d4a; color: #f8f4ec; }
-    .gold-border { border-color: rgba(201,168,76,0.35); }
-    .gold-glow:focus { box-shadow: 0 0 0 3px rgba(201,168,76,0.2); }
-    @keyframes fadeSlideIn { from { opacity:0; transform:translateY(8px); } to { opacity:1; transform:translateY(0); } }
-    .fade-in { animation: fadeSlideIn 0.3s ease forwards; }
-    @keyframes toastIn  { from { opacity:0; transform:translateX(-50%) translateY(20px); } to { opacity:1; transform:translateX(-50%) translateY(0); } }
-    @keyframes toastOut { from { opacity:1; } to { opacity:0; } }
-    .toast-in  { animation: toastIn  0.3s ease forwards; }
-    .toast-out { animation: toastOut 0.3s ease forwards; }
+    body { font-family:'Crimson Pro',Georgia,serif; }
+    select option { background:#1e2d4a; color:#f8f4ec; }
+    .gold-border { border-color:rgba(201,168,76,0.35); }
+    .gold-glow:focus { box-shadow:0 0 0 3px rgba(201,168,76,0.2); }
+    @keyframes fadeSlideIn { from{opacity:0;transform:translateY(8px)} to{opacity:1;transform:translateY(0)} }
+    .fade-in { animation:fadeSlideIn 0.3s ease forwards; }
     .bg-grid {
       background-image:
-        radial-gradient(ellipse 80% 40% at 50% 0%, rgba(201,168,76,0.07) 0%, transparent 70%),
-        repeating-linear-gradient(0deg, transparent, transparent 59px, rgba(201,168,76,0.04) 60px),
-        repeating-linear-gradient(90deg, transparent, transparent 59px, rgba(201,168,76,0.04) 60px);
+        radial-gradient(ellipse 80% 40% at 50% 0%,rgba(201,168,76,0.07) 0%,transparent 70%),
+        repeating-linear-gradient(0deg,transparent,transparent 59px,rgba(201,168,76,0.04) 60px),
+        repeating-linear-gradient(90deg,transparent,transparent 59px,rgba(201,168,76,0.04) 60px);
     }
-    ::-webkit-scrollbar { width:6px; }
-    ::-webkit-scrollbar-track { background:#0f172a; }
-    ::-webkit-scrollbar-thumb { background:#7a6128; border-radius:3px; }
+    ::-webkit-scrollbar{width:6px} ::-webkit-scrollbar-track{background:#0f172a}
+    ::-webkit-scrollbar-thumb{background:#7a6128;border-radius:3px}
   </style>
 </head>
 
 <body class="bg-navy text-white bg-grid min-h-screen">
   <div id="root">
-    <div class="min-h-screen flex items-center justify-center">
-      <div class="text-center">
-        <div class="text-gold text-4xl mb-4">✦</div>
-        <p class="font-cinzel text-gold/70 text-sm tracking-widest uppercase">Iniciando aplicación...</p>
-      </div>
+    <div style="min-height:100vh;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:12px">
+      <div style="color:#c9a84c;font-size:2.5rem">✦</div>
+      <p style="font-family:serif;color:rgba(201,168,76,0.6);font-size:0.75rem;letter-spacing:0.2em;text-transform:uppercase">Iniciando aplicación...</p>
     </div>
   </div>
 
@@ -242,122 +240,81 @@
     const { useState, useEffect, useCallback, useRef, useMemo } = React;
     const STORAGE_KEY = 'orienteFraterno_v2';
 
-    function detectPlatform() {
-      const ua = navigator.userAgent || '';
-      const isIOS     = /iPhone|iPad|iPod/i.test(ua);
-      const isAndroid = /Android/i.test(ua);
-      const isStandalone = window.matchMedia('(display-mode: standalone)').matches
-                        || window.navigator.standalone === true;
-      return { isIOS, isAndroid, isStandalone };
+    // ── Utilidades ────────────────────────────────────────────────────────
+    function loadEvents() {
+      try { const d = localStorage.getItem(STORAGE_KEY); return d ? JSON.parse(d) : []; }
+      catch(e) { return []; }
+    }
+    function saveEventsLocal(l) {
+      try { localStorage.setItem(STORAGE_KEY, JSON.stringify(l)); } catch(e) {}
+    }
+    async function saveEventToFirebase(ev) {
+      if (!db) return;
+      try { await db.collection('eventos').doc(String(ev.id)).set(ev); } catch(e) {}
+    }
+    async function deleteEventFromFirebase(ev) {
+      if (!db) return;
+      try { await db.collection('eventos').doc(ev.docId || String(ev.id)).delete(); } catch(e) {}
+    }
+    function formatDate(iso) {
+      if (!iso) return '';
+      const p = String(iso).split('-');
+      const months = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
+      if (p.length === 2) return `${p[1]} ${months[+p[0]-1]||''}`;
+      if (p.length === 3) return `${p[2]} ${months[+p[1]-1]||''}`;
+      return iso;
+    }
+    function daysUntil(iso) {
+      if (!iso) return 999;
+      try {
+        const today = new Date(); today.setHours(0,0,0,0);
+        const p = String(iso).split('-');
+        let m,d;
+        if (p.length===2) [m,d]=p; else if(p.length===3) [,m,d]=p; else return 999;
+        let next = new Date(today.getFullYear(), +m-1, +d);
+        if (isNaN(next)) return 999;
+        if (next < today) next.setFullYear(next.getFullYear()+1);
+        return Math.round((next-today)/86400000);
+      } catch(e) { return 999; }
     }
 
-    function getIOSVersion() {
-      const match = navigator.userAgent.match(/OS (\d+)_(\d+)/);
-      if (!match) return null;
-      return parseFloat(`${match[1]}.${match[2]}`);
+    // ── Service Worker ────────────────────────────────────────────────────
+    let swReg = null;
+    async function registerSW() {
+      if (!('serviceWorker' in navigator)) return null;
+      try {
+        swReg = await navigator.serviceWorker.register('./sw.js', {
+          scope: '/oriente-fraterno/', updateViaCache: 'none',
+        });
+        console.log('[App] SW registrado. Scope:', swReg.scope);
+        swReg.addEventListener('updatefound', () => {
+          const nw = swReg.installing;
+          if (nw) nw.addEventListener('statechange', () => {
+            if (nw.state === 'installed' && navigator.serviceWorker.controller)
+              nw.postMessage({ type: 'SKIP_WAITING' });
+          });
+        });
+        return swReg;
+      } catch(e) {
+        console.error('[App] Error registrando SW:', e.message);
+        return null;
+      }
+    }
+    async function syncEventsToSW(events) {
+      try {
+        const reg = swReg || await navigator.serviceWorker.ready;
+        const w = reg.active || reg.waiting || reg.installing;
+        if (w) w.postMessage({ type: 'SCHEDULE_EVENTS', events });
+      } catch(e) {}
     }
 
-    function WelcomeScreen({ onClose }) {
-      const { isIOS, isAndroid } = detectPlatform();
-      const [step, setStep] = useState(1);
-      const iosVersion      = getIOSVersion();
-      const iosOld          = isIOS && iosVersion !== null && iosVersion < 16.4;
-
-      const nextStep = () => setStep(s => s + 1);
-
-      return (
-        <div className="fixed inset-0 z-50 bg-navy flex flex-col items-center justify-center px-6 bg-grid overflow-y-auto">
-          <div className="w-full max-w-sm flex flex-col items-center gap-6 py-8">
-            <div className="text-center mb-2">
-              <div className="text-gold text-5xl mb-3">✦</div>
-              <h1 className="font-cinzel text-gold-light tracking-widest uppercase text-base font-bold leading-tight">
-                Oriente Fraterno · 148
-              </h1>
-              <p className="font-cinzel text-gold/50 tracking-widest uppercase text-xs mt-1">
-                Configuración de Notificaciones
-              </p>
-            </div>
-
-            <div className="w-full rounded-lg border gold-border bg-navy-mid/80 shadow-xl ring-1 ring-gold/5 p-5 space-y-6">
-              {step === 1 && (
-                <div className="fade-in space-y-4">
-                  {iosOld && (
-                    <div className="bg-red-900/30 border border-red-500/40 rounded p-3">
-                      <p className="font-crimson text-red-300 text-sm leading-snug">
-                        ⚠️ Tu iOS ({iosVersion}) no soporta notificaciones web. Actualiza a iOS 16.4 o superior para poder recibirlas.
-                      </p>
-                    </div>
-                  )}
-                  <div className="flex gap-3 items-start">
-                    <span className="bg-gold/20 text-gold w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold shrink-0 mt-0.5">1</span>
-                    <p className="font-crimson text-white/90 text-base leading-snug">
-                      Al ingresar, toca el botón <span className="text-gold font-semibold">"Activar Notificaciones Web"</span> y acepta el permiso del navegador.
-                    </p>
-                  </div>
-                  <div className="h-px bg-gold/15" />
-                  <div className="flex gap-3 items-start">
-                    <span className="bg-gold/20 text-gold w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold shrink-0 mt-0.5">2</span>
-                    <p className="font-crimson text-white/90 text-base leading-snug">
-                      {isIOS
-                        ? "En iOS, es obligatorio instalar la app usando 'Compartir' → 'Agregar al inicio' para recibir avisos."
-                        : "Asegúrate de tener la app instalada en tu pantalla de inicio para mayor fiabilidad."}
-                    </p>
-                  </div>
-                  <button onClick={nextStep} className="w-full py-3 mt-4 rounded font-cinzel text-xs tracking-widest uppercase bg-gold/10 border border-gold/30 text-gold font-bold">
-                    Siguiente Paso ➔
-                  </button>
-                </div>
-              )}
-
-              {step === 2 && (
-                <div className="fade-in space-y-4">
-                  <h3 className="font-cinzel text-gold text-xs tracking-widest uppercase text-center mb-2">Ajuste de Segundo Plano</h3>
-
-                  {isAndroid ? (
-                    <div className="space-y-3">
-                      <p className="font-crimson text-white/80 text-sm leading-tight italic">Para recibir avisos con la app cerrada:</p>
-                      <ul className="space-y-2 text-sm font-crimson text-white/90">
-                        <li className="flex gap-2"><span>•</span> Mantén presionado el icono de la app en tu inicio.</li>
-                        <li className="flex gap-2"><span>•</span> Toca <span className="text-gold">"Info de la aplicación"</span> (o el icono ⓘ).</li>
-                        <li className="flex gap-2"><span>•</span> Ve a <span className="text-gold">"Batería"</span> y selecciona <span className="text-gold">"Sin Restricciones"</span>.</li>
-                      </ul>
-                    </div>
-                  ) : (
-                    <div className="space-y-3">
-                      <p className="font-crimson text-white/80 text-sm leading-tight italic">Para usuarios de iPhone/iPad:</p>
-                      <ul className="space-y-2 text-sm font-crimson text-white/90">
-                        <li className="flex gap-2"><span>•</span> Instala la app: <span className="text-gold">Compartir → Agregar al inicio</span>.</li>
-                        <li className="flex gap-2"><span>•</span> Ve a <span className="text-gold">Ajustes → Notificaciones</span>.</li>
-                        <li className="flex gap-2"><span>•</span> Busca <span className="text-gold">"Oriente Fraterno"</span> y activa todos los avisos.</li>
-                      </ul>
-                    </div>
-                  )}
-
-                  <div className="h-px bg-gold/15" />
-
-                  <button
-                    onClick={onClose}
-                    className="w-full py-3 rounded font-cinzel text-xs tracking-widest uppercase bg-gradient-to-r from-gold via-gold-light to-gold text-navy font-bold shadow-lg shadow-gold/20"
-                  >
-                    ¡Entendido, Terminar! ✦
-                  </button>
-                </div>
-              )}
-            </div>
-
-            <p className="font-cinzel text-gold/25 text-xs tracking-[0.2em] uppercase">✦ A L:. G:. A:. D:. U:. ✦</p>
-          </div>
-        </div>
-      );
-    }
-
+    // ── Constantes ────────────────────────────────────────────────────────
     const TIPOS = [
-      { value: 'Cumpleaños',               label: 'Cumpleaños',               emoji: '🎂' },
-      { value: 'Fecha de casamiento',       label: 'Fecha de casamiento',       emoji: '💍' },
-      { value: 'Aniversario',               label: 'Aniversario',               emoji: '🌹' },
-      { value: 'Pasaje al Oriente Eterno',  label: 'Pasaje al Oriente Eterno',  emoji: '✦'  },
+      { value:'Cumpleaños',              label:'Cumpleaños',              emoji:'🎂' },
+      { value:'Fecha de casamiento',     label:'Fecha de casamiento',     emoji:'💍' },
+      { value:'Aniversario',             label:'Aniversario',             emoji:'🌹' },
+      { value:'Pasaje al Oriente Eterno',label:'Pasaje al Oriente Eterno',emoji:'✦'  },
     ];
-
     const TIPO_STYLES = {
       'Cumpleaños':               'bg-amber-900/20  border-amber-600/30',
       'Fecha de casamiento':      'bg-purple-900/20 border-purple-500/30',
@@ -365,100 +322,47 @@
       'Pasaje al Oriente Eterno': 'bg-slate-800/50  border-slate-500/30',
     };
 
-    function loadEvents() {
-      try {
-        const data = localStorage.getItem(STORAGE_KEY);
-        if (!data) return [];
-        const parsed = JSON.parse(data);
-        return Array.isArray(parsed) ? parsed : [];
-      } catch (e) { return []; }
-    }
-
-    function saveEvents(l) {
-      try { localStorage.setItem(STORAGE_KEY, JSON.stringify(l)); } catch(e) {}
-    }
-
-    async function saveEventToFirebase(ev) {
-      if (!db) return;
-      try { await db.collection('eventos').doc(String(ev.id)).set(ev); } catch(e) {}
-    }
-
-    async function deleteEventFromFirebase(ev) {
-      if (!db) return;
-      try {
-        const docId = ev.docId || String(ev.id);
-        await db.collection('eventos').doc(docId).delete();
-      } catch(e) {}
-    }
-
-    function formatDate(iso) {
-      if (!iso || typeof iso !== 'string') return '';
-      const parts = iso.split('-');
-      const months = ['Ene','Feb','Mar','Abr','May','Jun','Jul','Ago','Sep','Oct','Nov','Dic'];
-      if (parts.length === 2) return `${parts[1]} ${months[parseInt(parts[0]) - 1] || ''}`;
-      if (parts.length === 3) return `${parts[2]} ${months[parseInt(parts[1]) - 1] || ''}`;
-      return iso;
-    }
-
-    function daysUntil(iso) {
-      if (!iso || typeof iso !== 'string') return 999;
-      try {
-        const today = new Date(); today.setHours(0,0,0,0);
-        const parts = iso.split('-');
-        let m, d;
-        if (parts.length === 2) [m, d] = parts;
-        else if (parts.length === 3) [, m, d] = parts;
-        else return 999;
-        let next = new Date(today.getFullYear(), parseInt(m) - 1, parseInt(d));
-        if (isNaN(next.getTime())) return 999;
-        if (next < today) next.setFullYear(next.getFullYear() + 1);
-        return Math.round((next - today) / 86400000);
-      } catch (e) { return 999; }
-    }
-
-    let swRegistration = null;
-    async function registerServiceWorker() {
-      if (!('serviceWorker' in navigator)) return null;
-      try {
-        swRegistration = await navigator.serviceWorker.register('./sw.js', { scope: '/oriente-fraterno/', updateViaCache: 'none' });
-        return swRegistration;
-      } catch (err) { return null; }
-    }
-
-    async function syncEventsToSW(events) {
-      try {
-        const reg = swRegistration || await registerServiceWorker();
-        if (!reg || !reg.active) return;
-        reg.active.postMessage({ type: 'SCHEDULE_EVENTS', events });
-      } catch (err) {}
-    }
-
-    function Icon({ name, size = 18, className = '' }) {
+    // ── Componentes base ──────────────────────────────────────────────────
+    function Icon({ name, size=18, className='' }) {
       const ref = useRef(null);
       useEffect(() => {
-        if (ref.current && window.lucide) {
-          ref.current.innerHTML = '';
-          const iconType = lucide[name] || lucide['HelpCircle'];
-          if (iconType) {
-            const icon = lucide.createElement(iconType);
-            icon.setAttribute('width', size);
-            icon.setAttribute('height', size);
-            if (className) icon.setAttribute('class', className);
-            ref.current.appendChild(icon);
-          }
+        if (!ref.current || !window.lucide) return;
+        const iconData = lucide[name];
+        if (!iconData) return;
+        // lucide UMD expone íconos como arrays [tag, attrs, children]
+        // La forma correcta de usarlos es via lucide.createIcons() o manualmente
+        const svg = document.createElementNS('http://www.w3.org/2000/svg','svg');
+        svg.setAttribute('width', size);
+        svg.setAttribute('height', size);
+        svg.setAttribute('viewBox', '0 0 24 24');
+        svg.setAttribute('fill', 'none');
+        svg.setAttribute('stroke', 'currentColor');
+        svg.setAttribute('stroke-width', '2');
+        svg.setAttribute('stroke-linecap', 'round');
+        svg.setAttribute('stroke-linejoin', 'round');
+        if (className) svg.setAttribute('class', className);
+        // iconData[2] contiene los children del SVG
+        if (Array.isArray(iconData[2])) {
+          iconData[2].forEach(([tag, attrs]) => {
+            const el = document.createElementNS('http://www.w3.org/2000/svg', tag);
+            Object.entries(attrs||{}).forEach(([k,v]) => el.setAttribute(k,v));
+            svg.appendChild(el);
+          });
         }
+        ref.current.innerHTML = '';
+        ref.current.appendChild(svg);
       }, [name, size, className]);
       return <span ref={ref} style={{display:'inline-flex',alignItems:'center'}} />;
     }
 
     function Toast({ message, visible }) {
       return (
-        <div className={`fixed bottom-6 left-1/2 z-50 px-5 py-2.5 rounded-full bg-gradient-to-r from-gold to-gold-light text-navy font-cinzel text-xs tracking-widest uppercase shadow-lg pointer-events-none transition-all duration-300 ${visible ? 'opacity-100 translate-y-0' : 'opacity-0 translate-y-4'}`} style={{ transform: 'translateX(-50%)' }}>
+        <div className={`fixed bottom-6 left-1/2 z-50 px-5 py-2.5 rounded-full bg-gradient-to-r from-gold to-gold-light text-navy font-cinzel text-xs tracking-widest uppercase shadow-lg pointer-events-none transition-all duration-300 ${visible?'opacity-100':'opacity-0 translate-y-4'}`}
+          style={{transform:'translateX(-50%)'}}>
           {message}
         </div>
       );
     }
-
     function Divider({ label }) {
       return (
         <div className="flex items-center gap-3 my-6">
@@ -468,131 +372,190 @@
         </div>
       );
     }
+    function Card({ children, className='' }) {
+      return <div className={`rounded-lg border gold-border bg-navy-mid/80 shadow-xl ring-1 ring-gold/5 ${className}`}>{children}</div>;
+    }
 
-    function Card({ children, className = '' }) {
+    // ── Pantalla de bienvenida ────────────────────────────────────────────
+    function WelcomeScreen({ onClose }) {
+      const ios     = isIOS();
+      const android = /Android/i.test(navigator.userAgent);
+      const iosVer  = (() => { const m = navigator.userAgent.match(/OS (\d+)_/); return m ? +m[1] : null; })();
+      const iosOld  = ios && iosVer !== null && iosVer < 16;
+      const [step, setStep] = useState(1);
+
       return (
-        <div className={`rounded-lg border gold-border bg-navy-mid/80 shadow-xl ring-1 ring-gold/5 backdrop-blur-sm ${className}`}>
-          {children}
+        <div className="fixed inset-0 z-50 bg-navy bg-grid flex flex-col items-center justify-center px-6 overflow-y-auto">
+          <div className="w-full max-w-sm flex flex-col items-center gap-6 py-8">
+            <div className="text-center">
+              <div className="text-gold text-5xl mb-3">✦</div>
+              <h1 className="font-cinzel text-gold-light tracking-widest uppercase text-base font-bold">Oriente Fraterno · 148</h1>
+              <p className="font-cinzel text-gold/50 tracking-widest uppercase text-xs mt-1">Configuración de Notificaciones</p>
+            </div>
+            <Card className="w-full p-5 space-y-5">
+              {step === 1 && (
+                <div className="fade-in space-y-4">
+                  {iosOld && (
+                    <div className="bg-red-900/30 border border-red-500/40 rounded p-3">
+                      <p className="font-crimson text-red-300 text-sm">⚠️ Tu iOS ({iosVer}) no soporta notificaciones web. Actualizá a iOS 16.4+.</p>
+                    </div>
+                  )}
+                  <div className="flex gap-3 items-start">
+                    <span className="bg-gold/20 text-gold w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold shrink-0 mt-0.5">1</span>
+                    <p className="font-crimson text-white/90 text-base leading-snug">Tocá el botón <span className="text-gold font-semibold">"Activar Notificaciones Web"</span> y aceptá el permiso del navegador.</p>
+                  </div>
+                  <div className="h-px bg-gold/15" />
+                  <div className="flex gap-3 items-start">
+                    <span className="bg-gold/20 text-gold w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold shrink-0 mt-0.5">2</span>
+                    <p className="font-crimson text-white/90 text-base leading-snug">
+                      {ios ? "En iOS es obligatorio instalar la app: tocá Compartir → Agregar al inicio."
+                           : "Instalá la app en la pantalla de inicio para garantizar notificaciones en segundo plano."}
+                    </p>
+                  </div>
+                  <button onClick={() => setStep(2)} className="w-full py-3 mt-2 rounded font-cinzel text-xs tracking-widest uppercase bg-gold/10 border border-gold/30 text-gold font-bold">Siguiente ➔</button>
+                </div>
+              )}
+              {step === 2 && (
+                <div className="fade-in space-y-4">
+                  <h3 className="font-cinzel text-gold text-xs tracking-widest uppercase text-center">Ajuste de Segundo Plano</h3>
+                  {android ? (
+                    <ul className="space-y-2 text-sm font-crimson text-white/90">
+                      <li className="flex gap-2"><span>•</span>Mantené presionado el ícono de la app.</li>
+                      <li className="flex gap-2"><span>•</span>Tocá <span className="text-gold">Info de la aplicación ⓘ</span>.</li>
+                      <li className="flex gap-2"><span>•</span>Batería → seleccioná <span className="text-gold">Sin Restricciones</span>.</li>
+                    </ul>
+                  ) : (
+                    <ul className="space-y-2 text-sm font-crimson text-white/90">
+                      <li className="flex gap-2"><span>•</span>Instalá la app: <span className="text-gold">Compartir → Agregar al inicio</span>.</li>
+                      <li className="flex gap-2"><span>•</span>Ajustes → Notificaciones → buscá <span className="text-gold">Oriente Fraterno</span>.</li>
+                      <li className="flex gap-2"><span>•</span>Activá todas las notificaciones.</li>
+                    </ul>
+                  )}
+                  <div className="h-px bg-gold/15" />
+                  <button onClick={onClose} className="w-full py-3 rounded font-cinzel text-xs tracking-widest uppercase bg-gradient-to-r from-gold via-gold-light to-gold text-navy font-bold shadow-lg shadow-gold/20">
+                    ¡Entendido! ✦
+                  </button>
+                </div>
+              )}
+            </Card>
+            <p className="font-cinzel text-gold/25 text-xs tracking-[0.2em] uppercase">✦ A L:. G:. A:. D:. U:. ✦</p>
+          </div>
         </div>
       );
     }
 
+    // ── App principal ─────────────────────────────────────────────────────
     function App() {
-      const [events, setEvents]       = useState(loadEvents);
-      const [nombre, setNombre]       = useState('');
-      const [mes, setMes]             = useState('');
-      const [dia, setDia]             = useState('');
-      const [tipo, setTipo]           = useState('');
-      const [notifPerm, setNotifPerm] = useState(() => typeof Notification !== 'undefined' ? Notification.permission : 'denied');
-      const [toast, setToast]         = useState({ msg: '', visible: false });
-      const [loading, setLoading]     = useState(true);
+      const [events, setEvents]         = useState(loadEvents);
+      const [nombre, setNombre]         = useState('');
+      const [mes, setMes]               = useState('');
+      const [dia, setDia]               = useState('');
+      const [tipo, setTipo]             = useState('');
+      const [notifOk, setNotifOk]       = useState(() =>
+        typeof Notification !== 'undefined' && Notification.permission === 'granted'
+      );
+      const [toast, setToast]           = useState({ msg:'', visible:false });
+      const [loading, setLoading]       = useState(true);
       const [showWelcome, setShowWelcome] = useState(true);
-      const toastTimer = useRef(null);
+      const toastRef                    = useRef(null);
 
+      // Registrar SW inmediatamente al montar (independiente de showWelcome)
       useEffect(() => {
-        registerServiceWorker().then(async reg => {
-          if (reg && Notification.permission === 'granted') {
-            if (window._activarNotificaciones) await window._activarNotificaciones();
+        (async () => {
+          const reg = await registerSW();
+          if (!reg) return;
+          if (Notification.permission === 'granted') {
+            window._renovarRegistros(reg).catch(() => {});
           }
-        });
+        })();
       }, []);
 
+      // Suscripción Firestore en tiempo real
       useEffect(() => {
         if (!db) { setLoading(false); return; }
         const unsub = db.collection('eventos').onSnapshot(
           snap => {
-            const fbEvents = snap.docs.map(d => ({ docId: d.id, ...d.data() }));
-            setEvents(fbEvents);
-            saveEvents(fbEvents);
+            const evs = snap.docs.map(d => ({ docId: d.id, ...d.data() }));
+            setEvents(evs);
+            saveEventsLocal(evs);
             setLoading(false);
-            if (Notification.permission === 'granted') syncEventsToSW(fbEvents);
+            if (Notification.permission === 'granted') syncEventsToSW(evs);
           },
-          err => { setLoading(false); }
+          err => { console.error('[App] Firestore error:', err); setLoading(false); }
         );
         return () => unsub();
       }, []);
 
       const showToast = useCallback((msg) => {
-        clearTimeout(toastTimer.current);
+        clearTimeout(toastRef.current);
         setToast({ msg, visible: true });
-        toastTimer.current = setTimeout(() => setToast(t => ({ ...t, visible: false })), 2800);
+        toastRef.current = setTimeout(() => setToast(t => ({...t, visible:false})), 2800);
       }, []);
 
-      const sorted = useMemo(() => {
-        if (!events || !Array.isArray(events)) return [];
-        return [...events].sort((a,b) => daysUntil(a.fecha) - daysUntil(b.fecha));
-      }, [events]);
+      const sorted = useMemo(() =>
+        [...(Array.isArray(events) ? events : [])].sort((a,b) => daysUntil(a.fecha)-daysUntil(b.fecha))
+      , [events]);
 
       async function handleSave() {
-        if (!nombre.trim()) { showToast('Ingresa el nombre'); return; }
-        if (!mes || !dia)    { showToast('Selecciona mes y día'); return; }
-        if (!tipo)           { showToast('Selecciona el tipo de evento'); return; }
-        const fecha = `${String(mes).padStart(2,'0')}-${String(dia).padStart(2,'0')}`;
-        const ev = { id: Date.now(), nombre: nombre.trim(), fecha, tipo };
+        if (!nombre.trim())   { showToast('Ingresá el nombre'); return; }
+        if (!mes || !dia)     { showToast('Seleccioná mes y día'); return; }
+        if (!tipo)            { showToast('Seleccioná el tipo de evento'); return; }
+        const fecha = `${mes.padStart(2,'0')}-${dia.padStart(2,'0')}`;
+        const ev    = { id: Date.now(), nombre: nombre.trim(), fecha, tipo };
         await saveEventToFirebase(ev);
         setNombre(''); setMes(''); setDia(''); setTipo('');
         showToast('Evento registrado ✦');
       }
 
-      async function handleDelete(id) {
-        const ev = events.find(e => (e.id === id) || (e.docId === id));
-        if (ev) await deleteEventFromFirebase(ev);
+      async function handleDelete(ev) {
+        await deleteEventFromFirebase(ev);
         showToast('Evento eliminado');
       }
 
-      async function handleNotify() {
-        if (!('Notification' in window)) { showToast('Navegador no soportado'); return; }
+      async function handleActivarNotif() {
         showToast('Registrando dispositivo...');
-
-        const exito = await window._activarNotificaciones();
-        setNotifPerm(Notification.permission);
-
+        const reg  = swReg || await navigator.serviceWorker.ready.catch(() => null);
+        const exito = await window._activarNotificaciones(reg);
+        setNotifOk(Notification.permission === 'granted');
         if (exito) {
           await syncEventsToSW(events);
           showToast('Notificaciones activadas ✦');
         } else {
-          if (Notification.permission === 'denied') {
-            showToast('Permiso denegado. Revisá los ajustes del navegador.');
-          } else {
-            showToast('Error al activar. Intenta de nuevo.');
-          }
+          showToast(
+            Notification.permission === 'denied'
+              ? 'Permiso denegado. Revisá los ajustes del navegador.'
+              : 'Error al activar. Intentá de nuevo.'
+          );
         }
       }
 
-      if (showWelcome) {
-        return <WelcomeScreen onClose={() => setShowWelcome(false)} />;
-      }
+      if (showWelcome) return <WelcomeScreen onClose={() => setShowWelcome(false)} />;
 
-      if (loading) {
-        return (
-          <div className="min-h-screen bg-navy bg-grid flex items-center justify-center">
-            <div className="text-center">
-              <div className="text-gold text-4xl mb-4">✦</div>
-              <p className="font-cinzel text-gold/70 text-sm tracking-widest uppercase">Cargando eventos...</p>
-            </div>
+      if (loading) return (
+        <div className="min-h-screen bg-navy bg-grid flex items-center justify-center">
+          <div className="text-center">
+            <div className="text-gold text-4xl mb-4">✦</div>
+            <p className="font-cinzel text-gold/70 text-sm tracking-widest uppercase">Cargando eventos...</p>
           </div>
-        );
-      }
-
-      const notifGranted = notifPerm === 'granted';
+        </div>
+      );
 
       return (
         <div className="min-h-screen bg-navy bg-grid">
           <header className="sticky top-0 z-40 bg-navy/95 backdrop-blur border-b gold-border">
-            <div className="max-w-lg mx-auto px-4 py-3 flex items-center gap-3">
-              <div>
-                <h1 className="font-cinzel text-gold-light tracking-widest uppercase text-sm font-bold leading-tight">Registro de Eventos</h1>
-                <p className="font-cinzel text-gold/50 tracking-[0.2em] uppercase text-xs mt-0.5">Oriente Fraterno · 148</p>
-              </div>
+            <div className="max-w-lg mx-auto px-4 py-3">
+              <h1 className="font-cinzel text-gold-light tracking-widest uppercase text-sm font-bold">Registro de Eventos</h1>
+              <p className="font-cinzel text-gold/50 tracking-[0.2em] uppercase text-xs mt-0.5">Oriente Fraterno · 148</p>
             </div>
           </header>
 
           <main className="max-w-lg mx-auto px-4 pb-24">
             <Divider label="Notificaciones" />
             <Card className="p-4">
-              <button onClick={handleNotify} className={`w-full flex items-center justify-center gap-2 py-2.5 px-4 rounded font-cinzel text-xs tracking-widest uppercase border transition-all ${notifGranted ? 'border-gold/50 text-gold-light bg-gold/10' : 'border-gold/30 text-gold hover:bg-gold/10'}`}>
-                <Icon name={notifGranted ? 'BellRing' : 'Bell'} size={15} />
-                {notifGranted ? 'Notificaciones Activas ✦' : 'Activar Notificaciones Web'}
+              <button onClick={handleActivarNotif}
+                className={`w-full flex items-center justify-center gap-2 py-2.5 px-4 rounded font-cinzel text-xs tracking-widest uppercase border transition-all ${notifOk ? 'border-gold/50 text-gold-light bg-gold/10' : 'border-gold/30 text-gold hover:bg-gold/10'}`}>
+                <Icon name={notifOk ? 'BellRing' : 'Bell'} size={15} />
+                {notifOk ? 'Notificaciones Activas ✦' : 'Activar Notificaciones Web'}
               </button>
             </Card>
 
@@ -601,32 +564,33 @@
               <div className="space-y-4">
                 <div>
                   <label className="block font-cinzel text-gold text-xs tracking-widest uppercase mb-1.5">Nombre</label>
-                  <input type="text" value={nombre} onChange={e => setNombre(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleSave()} placeholder="Ej: José López" className="w-full bg-navy/70 border gold-border rounded px-3 py-2.5 text-white font-crimson text-base placeholder-white/25 focus:outline-none gold-glow focus:border-gold/70 transition" />
+                  <input type="text" value={nombre} onChange={e=>setNombre(e.target.value)}
+                    onKeyDown={e=>e.key==='Enter'&&handleSave()} placeholder="Ej: José López"
+                    className="w-full bg-navy/70 border gold-border rounded px-3 py-2.5 text-white font-crimson text-base placeholder-white/25 focus:outline-none gold-glow focus:border-gold/70 transition" />
                 </div>
                 <div className="flex gap-2">
-                  <select value={mes} onChange={e => setMes(e.target.value)} className="flex-1 bg-navy/70 border gold-border rounded px-3 py-2.5 text-white font-crimson text-base focus:outline-none">
+                  <select value={mes} onChange={e=>setMes(e.target.value)}
+                    className="flex-1 bg-navy/70 border gold-border rounded px-3 py-2.5 text-white font-crimson text-base focus:outline-none">
                     <option value="">— Mes —</option>
-                    {['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'].map((m,i) => (
+                    {['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'].map((m,i)=>(
                       <option key={i+1} value={String(i+1).padStart(2,'0')}>{m}</option>
                     ))}
                   </select>
-                  <select value={dia} onChange={e => setDia(e.target.value)} className="w-28 bg-navy/70 border gold-border rounded px-3 py-2.5 text-white font-crimson text-base focus:outline-none">
+                  <select value={dia} onChange={e=>setDia(e.target.value)}
+                    className="w-28 bg-navy/70 border gold-border rounded px-3 py-2.5 text-white font-crimson text-base focus:outline-none">
                     <option value="">— Día —</option>
-                    {(() => {
-                      const diasPorMes = [31,29,31,30,31,30,31,31,30,31,30,31];
-                      const maxDias = mes ? diasPorMes[parseInt(mes,10) - 1] : 31;
-                      if (dia && parseInt(dia,10) > maxDias) { setTimeout(() => setDia(''), 0); }
-                      return Array.from({length: maxDias}, (_,i) => i+1).map(d => (
-                        <option key={d} value={String(d).padStart(2,'0')}>{d}</option>
-                      ));
-                    })()}
+                    {Array.from({length: mes ? [31,29,31,30,31,30,31,31,30,31,30,31][+mes-1] : 31}, (_,i)=>i+1).map(d=>(
+                      <option key={d} value={String(d).padStart(2,'0')}>{d}</option>
+                    ))}
                   </select>
                 </div>
-                <select value={tipo} onChange={e => setTipo(e.target.value)} className="w-full bg-navy/70 border gold-border rounded px-3 py-2.5 text-white font-crimson text-base focus:outline-none">
+                <select value={tipo} onChange={e=>setTipo(e.target.value)}
+                  className="w-full bg-navy/70 border gold-border rounded px-3 py-2.5 text-white font-crimson text-base focus:outline-none">
                   <option value="">— Seleccionar evento —</option>
-                  {TIPOS.map(t => ( <option key={t.value} value={t.value}>{t.emoji} {t.label}</option> ))}
+                  {TIPOS.map(t=><option key={t.value} value={t.value}>{t.emoji} {t.label}</option>)}
                 </select>
-                <button onClick={handleSave} className="w-full py-3 rounded font-cinzel text-xs tracking-widest uppercase bg-gradient-to-r from-gold via-gold-light to-gold text-navy font-bold shadow-lg shadow-gold/20 flex items-center justify-center gap-2">
+                <button onClick={handleSave}
+                  className="w-full py-3 rounded font-cinzel text-xs tracking-widest uppercase bg-gradient-to-r from-gold via-gold-light to-gold text-navy font-bold shadow-lg shadow-gold/20 flex items-center justify-center gap-2">
                   <Icon name="PlusCircle" size={15} /> Registrar Evento
                 </button>
               </div>
@@ -634,45 +598,51 @@
 
             <Divider label={`Eventos Registrados (${sorted.length})`} />
             <Card className="p-3">
-              {sorted.length === 0 ? (
-                <div className="text-center py-12 text-white/25 italic text-sm">No hay eventos registrados aún.</div>
-              ) : (
-                <div className="space-y-2">
-                  {sorted.map((ev) => {
-                    const cfg = TIPOS.find(t => t.value === ev.tipo) || { emoji: '📌' };
-                    const days = daysUntil(ev.fecha);
-                    return (
-                      <div key={ev.docId || ev.id} className={`flex items-center gap-3 p-3 rounded border ${TIPO_STYLES[ev.tipo] || 'bg-navy/50 border-white/10'}`}>
-                        <div className="w-10 h-10 rounded-full border border-gold/20 flex items-center justify-center text-lg bg-black/20">{cfg.emoji}</div>
-                        <div className="flex-1 min-w-0">
-                          <p className="font-cinzel text-white text-sm font-semibold truncate">{ev.nombre}</p>
-                          <p className="text-gold text-xs uppercase">{ev.tipo} · {formatDate(ev.fecha)}</p>
-                          <p className="text-white/40 text-xs">{days === 0 ? 'HOY ✦' : `En ${days} días`}</p>
+              {sorted.length === 0
+                ? <div className="text-center py-12 text-white/25 italic text-sm">No hay eventos registrados aún.</div>
+                : <div className="space-y-2">
+                    {sorted.map(ev => {
+                      const cfg  = TIPOS.find(t=>t.value===ev.tipo)||{emoji:'📌'};
+                      const days = daysUntil(ev.fecha);
+                      return (
+                        <div key={ev.docId||ev.id} className={`flex items-center gap-3 p-3 rounded border ${TIPO_STYLES[ev.tipo]||'bg-navy/50 border-white/10'}`}>
+                          <div className="w-10 h-10 rounded-full border border-gold/20 flex items-center justify-center text-lg bg-black/20">{cfg.emoji}</div>
+                          <div className="flex-1 min-w-0">
+                            <p className="font-cinzel text-white text-sm font-semibold truncate">{ev.nombre}</p>
+                            <p className="text-gold text-xs uppercase">{ev.tipo} · {formatDate(ev.fecha)}</p>
+                            <p className="text-white/40 text-xs">{days===0?'HOY ✦':`En ${days} días`}</p>
+                          </div>
+                          <button onClick={()=>handleDelete(ev)} className="p-1.5 text-red-500/60 hover:text-red-400">
+                            <Icon name="Trash2" size={14} />
+                          </button>
                         </div>
-                        <button onClick={() => handleDelete(ev.docId || ev.id)} className="p-1.5 text-red-500/60 hover:text-red-400"><Icon name="Trash2" size={14} /></button>
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
+                      );
+                    })}
+                  </div>
+              }
             </Card>
           </main>
+
           <footer className="text-center pb-8 pt-2">
             <p className="font-cinzel text-gold/25 text-xs tracking-[0.2em] uppercase">✦ A L:. G:. A:. D:. U:. ✦</p>
             <p className="font-cinzel text-gold/20 text-[10px] tracking-widest uppercase mt-2">Creación: H.'. C. E. A. D. 2026</p>
           </footer>
+
           <Toast message={toast.msg} visible={toast.visible} />
         </div>
       );
     }
 
-    const rootElement = document.getElementById('root');
-    if (rootElement) {
-      try {
-        ReactDOM.createRoot(rootElement).render(<App />);
-      } catch (e) {
-        rootElement.innerHTML = '<div style="color:white;text-align:center;padding:20px;">Error al iniciar React: ' + e.message + '</div>';
-      }
+    // Montar React
+    const rootEl = document.getElementById('root');
+    try {
+      ReactDOM.createRoot(rootEl).render(<App />);
+    } catch(e) {
+      rootEl.innerHTML = '<div style="color:white;text-align:center;padding:40px;font-family:serif">'
+        + '<p style="color:#c9a84c;font-size:2rem">✦</p>'
+        + '<p>Error al iniciar: ' + e.message + '</p>'
+        + '<p style="font-size:0.8rem;opacity:0.5;margin-top:8px">Recargá la página (Ctrl+Shift+R)</p>'
+        + '</div>';
     }
   </script>
 </body>
