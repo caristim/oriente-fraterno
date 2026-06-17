@@ -1,64 +1,53 @@
-// Oriente Fraterno 148 — Service Worker v19.0
+// Oriente Fraterno 148 — Service Worker v18.1
+// CORRECCIONES v18.1:
+//  1. URLs normalizadas para evitar redirecciones de GitHub Pages.
+//  2. APP_BASE apunta a index.html para asegurar el clic en la notificación.
 
 importScripts('https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js');
 importScripts('https://www.gstatic.com/firebasejs/10.8.0/firebase-messaging-compat.js');
 
-const SW_VERSION = 'of-sw-v19.0';
+const SW_VERSION = 'of-sw-v18.1';
 const DB_NAME    = 'of_sw';
+const APP_URL    = 'https://caristim.github.io/oriente-fraterno/index.html';
 const APP_ROOT   = 'https://caristim.github.io/oriente-fraterno/';
-const APP_URL    = 'https://caristim.github.io/oriente-fraterno/';
 const ICON_192   = 'https://caristim.github.io/oriente-fraterno/icon-192.png';
 const BADGE_URL  = 'https://caristim.github.io/oriente-fraterno/icon-192.png';
 
-const CACHE_NAME    = 'of-cache-v19.0';
+const CACHE_NAME   = 'of-cache-v18.1';
 const PRECACHE_URLS = [
   APP_ROOT,
-  APP_ROOT + 'index.html',
+  APP_URL,
   APP_ROOT + 'manifest.json',
   APP_ROOT + 'icon-192.png',
   APP_ROOT + 'icon-512.png',
 ];
 
-let fcmMessaging   = null;
-let fcmInitialized = false;
-
-function tryInitFirebase() {
-  if (fcmInitialized) return;
-  fcmInitialized = true;
-  try {
-    const existingApps = firebase.apps || [];
-    if (existingApps.length === 0) {
-      firebase.initializeApp({
-        apiKey:            'AIzaSyD9gQW61AvKHhNai6gljNFE7q9rS7KKuN8',
-        authDomain:        'orientefraterno148-2a0c1.firebaseapp.com',
-        projectId:         'orientefraterno148-2a0c1',
-        storageBucket:     'orientefraterno148-2a0c1.firebasestorage.app',
-        messagingSenderId: '101867774014',
-        appId:             '1:101867774014:web:0b4bb797293910c419716f',
-      });
-    }
-    fcmMessaging = firebase.messaging();
-    console.log('[SW] Firebase + FCM inicializados correctamente.');
-  } catch (err) {
-    console.warn('[SW] Firebase no disponible (normal en Firefox/Safari):', err.message);
-    fcmMessaging = null;
-  }
+// ── Inicialización Firebase ───────────────────────────────────────────────────
+let fcmMessaging = null;
+try {
+  firebase.initializeApp({
+    apiKey:            'AIzaSyD9gQW61AvKHhNai6gljNFE7q9rS7KKuN8',
+    authDomain:        'orientefraterno148-2a0c1.firebaseapp.com',
+    projectId:         'orientefraterno148-2a0c1',
+    storageBucket:     'orientefraterno148-2a0c1.firebasestorage.app',
+    messagingSenderId: '101867774014',
+    appId:             '1:101867774014:web:0b4bb797293910c419716f',
+  });
+  fcmMessaging = firebase.messaging();
+} catch (err) {
+  console.warn('[SW] Firebase no disponible en este entorno:', err.message);
 }
 
-tryInitFirebase();
-
-// ── HANDLER FCM BACKGROUND ────────────────────────────────────────────────────
+// ── HANDLER FCM BACKGROUND (Android / Chrome con app CERRADA) ────────────────
 if (fcmMessaging) {
   fcmMessaging.onBackgroundMessage(async payload => {
-    console.log('[SW-FCM] onBackgroundMessage:', JSON.stringify(payload));
+    console.log('[SW-FCM] onBackgroundMessage recibido:', JSON.stringify(payload));
 
     const data   = payload.data || {};
     const titulo = data.title || 'Oriente Fraterno 148';
     const cuerpo = data.body  || 'Tenés un evento hoy ✦';
     const url    = data.url   || APP_URL;
     const evTag  = data.tag   || ('of-fcm-' + Date.now());
-
-    await dbSet('last_fcm_tag', evTag);
 
     await self.registration.showNotification(titulo, {
       body:               cuerpo,
@@ -74,9 +63,9 @@ if (fcmMessaging) {
   });
 }
 
-// ── HANDLER WEB PUSH NATIVO ───────────────────────────────────────────────────
+// ── HANDLER WEB PUSH NATIVO (iOS Safari / Firefox / Edge) ────────────────────
 self.addEventListener('push', e => {
-  console.log('[SW-Push] Evento push nativo recibido');
+  console.log('[SW-Push] Evento push nativo recibido (iOS/Web Push)');
 
   let titulo = 'Oriente Fraterno 148';
   let cuerpo = 'Tenés un evento hoy ✦';
@@ -97,14 +86,8 @@ self.addEventListener('push', e => {
   }
 
   e.waitUntil(
-    (async () => {
-      const lastFcmTag = await dbGet('last_fcm_tag');
-      if (lastFcmTag && lastFcmTag === evTag) {
-        console.log('[SW-Push] Notificación ya procesada por FCM, ignorando duplicado.');
-        return;
-      }
-
-      await self.registration.showNotification(titulo, {
+    Promise.all([
+      self.registration.showNotification(titulo, {
         body:               cuerpo,
         icon:               ICON_192,
         badge:              BADGE_URL,
@@ -112,18 +95,17 @@ self.addEventListener('push', e => {
         requireInteraction: true,
         vibrate:            [200, 100, 200, 100, 200],
         data:               { url },
-      });
-      await markFiredToday();
-    })()
+      }),
+      markFiredToday()
+    ])
   );
 });
 
-// ── VERIFICACIÓN LOCAL ────────────────────────────────────────────────────────
+// ── TERCER NIVEL DE SEGURIDAD: verificación local ────────────────────────────
 async function checkAndNotify() {
   try {
     const events = await dbGet('events');
     if (!Array.isArray(events) || events.length === 0) return;
-
     const now   = new Date();
     const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
     const fired = (await dbGet('fired')) || {};
@@ -131,13 +113,11 @@ async function checkAndNotify() {
 
     for (const ev of events) {
       if (!ev.fecha || !ev.nombre || !ev.tipo) continue;
-
       const parts = String(ev.fecha).split('-');
       let month, day;
-      if (parts.length === 2)      { [month, day] = parts.map(Number); }
-      else if (parts.length === 3) { [, month, day] = parts.map(Number); }
+      if (parts.length === 2)      [month, day] = parts.map(Number);
+      else if (parts.length === 3) [, month, day] = parts.map(Number);
       else continue;
-
       if (!month || !day) continue;
 
       const evDay   = new Date(now.getFullYear(), month - 1, day);
@@ -148,21 +128,19 @@ async function checkAndNotify() {
       const fireKey = `${evId}-${now.getFullYear()}`;
       if (fired[fireKey]) continue;
 
-      try {
-        await self.registration.showNotification('Oriente Fraterno 148', {
-          body:               `Hoy: ${ev.tipo} de ${ev.nombre}`,
-          icon:               ICON_192,
-          badge:              BADGE_URL,
-          tag:                `of-local-${evId}`,
-          requireInteraction: true,
-          vibrate:            [200, 100, 200, 100, 200],
-          data:               { url: APP_URL },
-        });
-        fired[fireKey] = true;
-        changed = true;
-      } catch (notifErr) {
-        console.warn('[SW] showNotification falló:', notifErr.message);
-      }
+      if (typeof Notification !== 'undefined' && Notification.permission !== 'granted') continue;
+
+      await self.registration.showNotification('Oriente Fraterno 148', {
+        body:               `Hoy: ${ev.tipo} de ${ev.nombre}`,
+        icon:               ICON_192,
+        badge:              BADGE_URL,
+        tag:                `of-local-${evId}`,
+        requireInteraction: true,
+        vibrate:            [200, 100, 200, 100, 200],
+        data:               { url: APP_URL },
+      });
+      fired[fireKey] = true;
+      changed = true;
     }
 
     if (changed) await dbSet('fired', fired);
@@ -175,7 +153,6 @@ async function markFiredToday() {
   try {
     const events = await dbGet('events');
     if (!Array.isArray(events) || events.length === 0) return;
-
     const now   = new Date();
     const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
     const fired = (await dbGet('fired')) || {};
@@ -183,13 +160,11 @@ async function markFiredToday() {
 
     for (const ev of events) {
       if (!ev.fecha || !ev.nombre) continue;
-
       const parts = String(ev.fecha).split('-');
       let month, day;
-      if (parts.length === 2)      { [month, day] = parts.map(Number); }
-      else if (parts.length === 3) { [, month, day] = parts.map(Number); }
+      if (parts.length === 2)      [month, day] = parts.map(Number);
+      else if (parts.length === 3) [, month, day] = parts.map(Number);
       else continue;
-
       if (!month || !day) continue;
 
       const evDay = new Date(now.getFullYear(), month - 1, day);
@@ -206,7 +181,7 @@ async function markFiredToday() {
   }
 }
 
-// ── Helpers de IndexedDB ──────────────────────────────────────────────────────
+// ── IndexedDB helpers ─────────────────────────────────────────────────────────
 function openDB() {
   return new Promise((res, rej) => {
     const req = indexedDB.open(DB_NAME, 1);
@@ -218,7 +193,6 @@ function openDB() {
     req.onerror   = e => rej(e.target.error);
   });
 }
-
 async function dbGet(key) {
   try {
     const db = await openDB();
@@ -230,7 +204,6 @@ async function dbGet(key) {
     });
   } catch (_) { return null; }
 }
-
 async function dbSet(key, value) {
   try {
     const db = await openDB();
@@ -245,7 +218,6 @@ async function dbSet(key, value) {
 
 // ── Lifecycle ─────────────────────────────────────────────────────────────────
 self.addEventListener('install', e => {
-  console.log('[SW] Instalando versión:', SW_VERSION);
   e.waitUntil(
     caches.open(CACHE_NAME)
       .then(cache => cache.addAll(PRECACHE_URLS).catch(err => console.warn('[SW] Pre-cache parcial:', err)))
@@ -254,23 +226,15 @@ self.addEventListener('install', e => {
 });
 
 self.addEventListener('activate', e => {
-  console.log('[SW] Activando versión:', SW_VERSION);
   e.waitUntil(
     caches.keys()
-      .then(keys => Promise.all(
-        keys.filter(k => k !== CACHE_NAME).map(k => {
-          console.log('[SW] Eliminando caché antiguo:', k);
-          return caches.delete(k);
-        })
-      ))
+      .then(keys => Promise.all(keys.filter(k => k !== CACHE_NAME).map(k => caches.delete(k))))
       .then(() => self.clients.claim())
   );
 });
 
-// ── Mensajes desde la app ─────────────────────────────────────────────────────
 self.addEventListener('message', async e => {
   if (!e.data) return;
-
   if (e.data.type === 'SCHEDULE_EVENTS') {
     await dbSet('events', e.data.events || []);
     await checkAndNotify();
@@ -279,7 +243,7 @@ self.addEventListener('message', async e => {
     await checkAndNotify();
   }
   if (e.data.type === 'PING') {
-    if (e.source) e.source.postMessage({ type: 'PONG', version: SW_VERSION });
+    e.source && e.source.postMessage({ type: 'PONG', version: SW_VERSION });
   }
   if (e.data.type === 'SKIP_WAITING') {
     self.skipWaiting();
@@ -301,7 +265,7 @@ self.addEventListener('fetch', e => {
           }
           return response;
         }).catch(() =>
-          caches.match(APP_ROOT + 'index.html')
+          caches.match(APP_URL)
             .then(fb => fb || new Response('Sin conexión', { status: 503 }))
         );
       })
@@ -318,11 +282,10 @@ self.addEventListener('fetch', e => {
   );
 });
 
-// ── Notificaciones Clic / Cierre ──────────────────────────────────────────────
+// ── Clic en notificación ──────────────────────────────────────────────────────
 self.addEventListener('notificationclick', e => {
   e.notification.close();
   const targetUrl = (e.notification.data && e.notification.data.url) || APP_URL;
-
   e.waitUntil(
     self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(clients => {
       const appClient = clients.find(c => c.url.startsWith(APP_ROOT));
@@ -330,8 +293,4 @@ self.addEventListener('notificationclick', e => {
       return self.clients.openWindow(targetUrl);
     })
   );
-});
-
-self.addEventListener('notificationclose', e => {
-  console.log('[SW] Notificación cerrada por el usuario:', e.notification.tag);
 });
