@@ -8,10 +8,8 @@
   <meta name="apple-mobile-web-app-capable" content="yes" />
   <meta name="apple-mobile-web-app-title" content="Oriente Fraterno" />
 
-  <!-- PWA Manifest -->
   <link rel="manifest" href="./manifest.json" />
 
-  <!-- Tailwind CSS CDN -->
   <script src="https://cdn.tailwindcss.com"></script>
   <script>
     tailwind.config = {
@@ -30,17 +28,13 @@
     }
   </script>
 
-  <!-- React + ReactDOM CDN -->
   <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
 
-  <!-- Babel (JSX transpiler) -->
   <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
 
-  <!-- Lucide Icons CDN -->
   <script src="https://unpkg.com/lucide@latest/dist/umd/lucide.min.js"></script>
 
-  <!-- Firebase SDK -->
   <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-messaging-compat.js"></script>
@@ -56,13 +50,10 @@
       appId:             '1:101867774014:web:0b4bb797293910c419716f',
     };
 
-    // CORRECCIÓN: La VAPID key es para Web Push nativo (iOS/Firefox/Edge).
-    // Es distinta al apiKey de Firebase. Debe coincidir con la que usa
-    // el GitHub Action (secrets.OF_VAPID_PUBLIC_KEY).
     const VAPID_PUBLIC_KEY = 'BM1SqlyjKhW45Y2JSBqDTYRT5QBV0yduJBtonc_QrlqM1DgaDmanz_w1R0Qj40ZuiG-rz4s4stIqBuYmciutG9Y';
 
     let db          = null;
-    let fcmReady    = false; // ¿el SDK de Firebase Messaging está listo?
+    let fcmReady    = false; 
 
     try {
       firebase.initializeApp(firebaseConfig);
@@ -82,13 +73,9 @@
           || (navigator.userAgent || '').toLowerCase().includes('firefox');
     }
 
-    // CORRECCIÓN: detectar si FCM está disponible en este navegador.
-    // FCM solo funciona en Chromium-based browsers (Chrome, Edge, Samsung Internet).
-    // NO funciona en Firefox ni en iOS Safari (aunque esté como PWA).
     function isFCMCapable() {
-      if (isIOSBrowser())    return false; // iOS Safari: usar Web Push nativo
-      if (isFirefoxBrowser()) return false; // Firefox: usar Web Push nativo
-      // Verificar que el navegador soporte la API de Firebase Messaging
+      if (isIOSBrowser())    return false; 
+      if (isFirefoxBrowser()) return false; 
       return typeof firebase !== 'undefined'
           && typeof firebase.messaging === 'function';
     }
@@ -102,14 +89,12 @@
     }
 
     // ── Generar ID estable para la suscripción Web Push ──────────────────
-    // CORRECCIÓN: btoa() puede fallar con caracteres Unicode en el endpoint.
-    // Usamos una función de hash simple y segura.
     function hashEndpoint(endpoint) {
       let hash = 0;
       for (let i = 0; i < endpoint.length; i++) {
         const char = endpoint.charCodeAt(i);
         hash = ((hash << 5) - hash) + char;
-        hash |= 0; // Convertir a entero 32-bit
+        hash |= 0; 
       }
       return 'wp_' + Math.abs(hash).toString(36);
     }
@@ -119,10 +104,7 @@
       try {
         if (!('serviceWorker' in navigator) || !('PushManager' in window) || !db) return false;
 
-        // Obtener el registro del SW para asociar la suscripción
         const reg = swReg || await navigator.serviceWorker.ready;
-
-        // Verificar/obtener suscripción existente
         let sub = await reg.pushManager.getSubscription();
 
         if (!sub) {
@@ -141,7 +123,6 @@
 
         if (!endpoint || !p256dh || !auth) return false;
 
-        // CORRECCIÓN: ID estable basado en hash del endpoint (evita caracteres inválidos en Firestore)
         const docId = hashEndpoint(endpoint);
 
         const platform = isIOSBrowser()     ? 'ios'
@@ -172,9 +153,6 @@
         const messaging = firebase.messaging();
         const reg       = swReg || await navigator.serviceWorker.ready;
 
-        // CORRECCIÓN CRÍTICA: siempre pasar serviceWorkerRegistration.
-        // Esto fuerza a FCM a usar nuestro sw.js en lugar de buscar
-        // /firebase-messaging-sw.js en la raíz del dominio.
         const token = await messaging.getToken({
           vapidKey:                 VAPID_PUBLIC_KEY,
           serviceWorkerRegistration: reg,
@@ -182,7 +160,6 @@
 
         if (!token) return false;
 
-        // CORRECCIÓN: Limpiar token anterior si cambió
         const prevToken = localStorage.getItem('fcm_token');
         if (prevToken && prevToken !== token) {
           try {
@@ -199,13 +176,8 @@
 
         localStorage.setItem('fcm_token', token);
 
-        // CORRECCIÓN: Escuchar renovación automática de token FCM.
-        // Cuando FCM invalida el token (cada 1-2 meses), onTokenRefresh
-        // se llama y aquí actualizamos Firestore automáticamente.
         messaging.onMessage(payload => {
           console.log('[FCM] Mensaje recibido en primer plano (app abierta):', payload);
-          // No mostramos notificación aquí porque la app está visible.
-          // El SW ya maneja el caso de background.
         });
 
         console.log('[FCM] Token registrado. Token:', token.substring(0, 24) + '...');
@@ -217,81 +189,33 @@
       }
     }
 
-    // ── Verificar y renovar suscripciones al abrir la app ────────────────
-    // Se llama automáticamente al inicio si el usuario ya tiene permiso.
-    // Renueva tanto el token FCM (Chromium) como la suscripción Web Push
-    // (iOS/Firefox) para garantizar que Firestore siempre tiene datos válidos.
+    // ── Verificar y renovar token FCM al abrir la app ────────────────────
     async function verificarYRenovarToken(swReg) {
-      if (!db) return;
-      const reg = swReg || await navigator.serviceWorker.ready.catch(() => null);
-      if (!reg) return;
+      if (!isFCMCapable() || !db) return;
+      try {
+        const messaging = firebase.messaging();
+        const reg       = swReg || await navigator.serviceWorker.ready;
+        const nuevoToken = await messaging.getToken({
+          vapidKey:                 VAPID_PUBLIC_KEY,
+          serviceWorkerRegistration: reg,
+        });
+        if (!nuevoToken) return;
 
-      // ── Renovar token FCM (solo en navegadores Chromium) ──────────────
-      if (isFCMCapable()) {
-        try {
-          const messaging  = firebase.messaging();
-          const nuevoToken = await messaging.getToken({
-            vapidKey:                 VAPID_PUBLIC_KEY,
-            serviceWorkerRegistration: reg,
+        const tokenGuardado = localStorage.getItem('fcm_token');
+        if (nuevoToken !== tokenGuardado) {
+          console.log('[FCM] Token renovado automáticamente.');
+          if (tokenGuardado) {
+            try { await db.collection('fcm_tokens').doc(tokenGuardado).delete(); } catch(_) {}
+          }
+          await db.collection('fcm_tokens').doc(nuevoToken).set({
+            token:     nuevoToken,
+            platform:  'chromium',
+            updatedAt: new Date().toISOString(),
           });
-          if (nuevoToken) {
-            const tokenGuardado = localStorage.getItem('fcm_token');
-            if (nuevoToken !== tokenGuardado) {
-              console.log('[FCM] Token renovado automáticamente.');
-              if (tokenGuardado) {
-                try { await db.collection('fcm_tokens').doc(tokenGuardado).delete(); } catch(_) {}
-              }
-              await db.collection('fcm_tokens').doc(nuevoToken).set({
-                token:     nuevoToken,
-                platform:  'chromium',
-                updatedAt: new Date().toISOString(),
-              });
-              localStorage.setItem('fcm_token', nuevoToken);
-            } else {
-              // Token igual: actualizar updatedAt para que el workflow sepa que sigue activo
-              await db.collection('fcm_tokens').doc(nuevoToken).set({
-                token:     nuevoToken,
-                platform:  'chromium',
-                updatedAt: new Date().toISOString(),
-              });
-            }
-          }
-        } catch (err) {
-          console.warn('[FCM] No se pudo renovar el token FCM:', err.message);
+          localStorage.setItem('fcm_token', nuevoToken);
         }
-      }
-
-      // ── Renovar suscripción Web Push (iOS/Firefox/todos los que la tienen) ──
-      // Aunque el usuario sea Chromium y use FCM como canal principal,
-      // también puede tener una suscripción Web Push de respaldo que hay
-      // que mantener actualizada en Firestore.
-      if ('PushManager' in window) {
-        try {
-          const sub = await reg.pushManager.getSubscription();
-          if (sub) {
-            // La suscripción existe: refrescarla en Firestore
-            const subJson  = sub.toJSON();
-            const endpoint = subJson.endpoint;
-            const p256dh   = subJson.keys && subJson.keys.p256dh;
-            const auth     = subJson.keys && subJson.keys.auth;
-            if (endpoint && p256dh && auth) {
-              const docId    = hashEndpoint(endpoint);
-              const platform = isIOSBrowser()     ? 'ios'
-                             : isFirefoxBrowser()  ? 'firefox'
-                             : 'chromium';
-              await db.collection('webpush_subscriptions').doc(docId).set({
-                endpoint,
-                p256dh,
-                auth,
-                platform,
-                updatedAt: new Date().toISOString(),
-              });
-              console.log('[WebPush] Suscripción refrescada en Firestore. Platform:', platform);
-            }
-          }
-        } catch (err) {
-          console.warn('[WebPush] No se pudo refrescar la suscripción:', err.message);
-        }
+      } catch (err) {
+        console.warn('[FCM] No se pudo renovar el token:', err.message);
       }
     }
 
@@ -302,7 +226,6 @@
         return false;
       }
 
-      // Solicitar permiso si no está concedido
       if (Notification.permission !== 'granted') {
         const permiso = await Notification.requestPermission();
         if (permiso !== 'granted') {
@@ -314,21 +237,17 @@
       let exito = false;
 
       if (isIOSBrowser() || isFirefoxBrowser()) {
-        // iOS Safari / Firefox: SOLO Web Push nativo
         console.log('[Notif] Usando Web Push nativo (iOS/Firefox).');
         exito = await registrarWebPushNativo(swReg);
       } else {
-        // Chrome / Edge: FCM + Web Push como respaldo
         console.log('[Notif] Usando FCM (Chromium).');
         const fcmOk = await registrarTokenFCM(swReg);
         if (fcmOk) {
           exito = true;
-          // Web Push como canal de respaldo (por si FCM falla un día)
           await registrarWebPushNativo(swReg).catch(err =>
             console.warn('[Notif] Web Push de respaldo falló (no crítico):', err.message)
           );
         } else {
-          // FCM falló: intentar solo con Web Push
           console.log('[Notif] FCM falló, intentando Web Push como respaldo.');
           exito = await registrarWebPushNativo(swReg);
         }
@@ -339,11 +258,9 @@
 
     window._activarNotificaciones = activarNotificaciones;
     window._verificarYRenovarToken = verificarYRenovarToken;
-    // Alias legacy
     window._registrarTokenFCM = activarNotificaciones;
   </script>
 
-  <!-- Google Fonts -->
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700&family=Crimson+Pro:ital,wght@0,300;0,400;1,300&display=swap" rel="stylesheet" />
 
@@ -381,7 +298,7 @@
     </div>
   </div>
 
-  <script type="text/babel">
+  <script type="text/babel" data-type="module">
     const { useState, useEffect, useCallback, useRef, useMemo } = React;
     const STORAGE_KEY = 'orienteFraterno_v2';
 
@@ -400,7 +317,6 @@
       return parseFloat(`${match[1]}.${match[2]}`);
     }
 
-    // ── Pantalla de bienvenida ──────────────────────────────────────────────
     function WelcomeScreen({ onClose }) {
       const { isIOS, isAndroid } = detectPlatform();
       const [step, setStep]      = useState(1);
@@ -565,23 +481,20 @@
     async function registerServiceWorker() {
       if (!('serviceWorker' in navigator)) return null;
       try {
-        // CORRECCIÓN: El SW se llama sw.js (no firebase-messaging-sw.js).
-        // Usamos './sw.js' relativo a la URL base de la app.
-        // Scope '/oriente-fraterno/' cubre toda la app en GitHub Pages.
+        // CORRECCIÓN: Se agrega type: 'module' para resolver errores de importación interna en navegadores modernos
         swRegistration = await navigator.serviceWorker.register('./sw.js', {
           scope:          '/oriente-fraterno/',
-          updateViaCache: 'none', // Siempre verificar actualizaciones del SW
+          updateViaCache: 'none',
+          type:           'module' 
         });
         console.log('[App] SW registrado. Scope:', swRegistration.scope);
 
-        // Escuchar actualizaciones del SW
         swRegistration.addEventListener('updatefound', () => {
           const newWorker = swRegistration.installing;
           if (newWorker) {
             newWorker.addEventListener('statechange', () => {
               if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
                 console.log('[App] Nueva versión del SW disponible.');
-                // Activar automáticamente el nuevo SW
                 newWorker.postMessage({ type: 'SKIP_WAITING' });
               }
             });
@@ -670,24 +583,17 @@
       const [showWelcome, setShowWelcome] = useState(true);
       const toastTimer                    = useRef(null);
 
-      // CORRECCIÓN: El SW se registra INMEDIATAMENTE al montar el componente,
-      // independientemente de si showWelcome está activo o no.
-      // Antes solo se registraba al cerrar la pantalla de bienvenida,
-      // lo que retrasaba el registro y perdía push events.
       useEffect(() => {
         (async () => {
           const reg = await registerServiceWorker();
           if (!reg) return;
 
-          // CORRECCIÓN: Si ya tenía permiso (usuario recurrente),
-          // renovar el token FCM automáticamente sin pedir permiso de nuevo.
           if (Notification.permission === 'granted') {
             await window._verificarYRenovarToken(reg).catch(() => {});
           }
         })();
-      }, []); // Solo al montar
+      }, []); 
 
-      // Suscripción en tiempo real a Firestore
       useEffect(() => {
         if (!db) { setLoading(false); return; }
 
@@ -697,7 +603,6 @@
             setEvents(fbEvents);
             saveEvents(fbEvents);
             setLoading(false);
-            // Sincronizar eventos con el SW para la verificación local
             if (Notification.permission === 'granted') syncEventsToSW(fbEvents);
           },
           err => {
