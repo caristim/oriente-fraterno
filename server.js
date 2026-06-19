@@ -172,10 +172,10 @@ async function checkAndNotify() {
   }
 }
 
-// ── Cron: todos los días a las 8:00 AM (hora Argentina UTC-3) ─────────────────
-// 8:00 AM ART = 11:00 UTC = "0 11 * * *"
-cron.schedule('0 11 * * *', () => {
-  console.log('[Cron] ⏰ Job diario disparado (8:00 AM ART)');
+// ── Cron: todos los días a las 9:00 AM (hora Uruguay UTC-3) ──────────────────
+// 9:00 AM UYT = 12:00 UTC = "0 12 * * *"
+cron.schedule('0 12 * * *', () => {
+  console.log('[Cron] ⏰ Job diario disparado (9:00 AM Uruguay)');
   checkAndNotify();
 }, { timezone: 'UTC' });
 
@@ -199,7 +199,7 @@ app.get('/api/status', async (req, res) => {
     vapidConfigured: !!VAPID_PRIVATE_KEY,
     subscriptions:   subs,
     events,
-    nextCron:        '08:00 ART (11:00 UTC) daily',
+    nextCron:        '09:00 Uruguay (12:00 UTC) daily',
   });
 });
 

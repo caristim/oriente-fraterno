@@ -369,10 +369,10 @@
       return (
         <div className="fixed inset-0 z-50 bg-navy bg-grid flex flex-col items-center justify-center px-6 overflow-y-auto">
           <div className="w-full max-w-sm flex flex-col items-center gap-6 py-8">
-            <div className="text-center">
-              <div className="text-gold text-5xl mb-3">✦</div>
-              <h1 className="font-cinzel text-gold-light tracking-widest uppercase text-base font-bold">Oriente Fraterno · 148</h1>
-              <p className="font-cinzel text-gold/50 tracking-widest uppercase text-xs mt-1">Configuración de Notificaciones</p>
+            <div className="w-full text-center">
+              <div className="text-gold text-5xl mb-3 text-center">✦</div>
+              <h1 className="font-cinzel text-gold-light tracking-widest uppercase text-base font-bold text-center">Oriente Fraterno · 148</h1>
+              <p className="font-cinzel text-gold/50 tracking-widest uppercase text-xs mt-1 text-center">Configuración de Notificaciones</p>
             </div>
 
             <Card className="w-full p-5 space-y-5">
@@ -380,27 +380,27 @@
                 <div className="fade-in space-y-4">
                   {iosOld && (
                     <div className="bg-red-900/30 border border-red-500/40 rounded p-3">
-                      <p className="font-crimson text-red-300 text-sm">⚠️ Tu iOS ({iosVer}) no soporta notificaciones web. Actualizá a iOS 16.4+ para recibirlas.</p>
+                      <p className="font-crimson text-red-300 text-sm">⚠️ Tu iOS ({iosVer}) no soporta notificaciones web. Actualiza a iOS 16.4+ para recibirlas.</p>
                     </div>
                   )}
                   {ios && !iosOld && (
                     <div className="bg-amber-900/30 border border-amber-600/40 rounded p-3">
-                      <p className="font-crimson text-amber-200 text-sm">📱 En iPhone/iPad debés instalar la app primero y luego activar notificaciones desde adentro.</p>
+                      <p className="font-crimson text-amber-200 text-sm">📱 En iPhone/iPad debes instalar la app primero y luego activar notificaciones desde adentro.</p>
                     </div>
                   )}
                   <div className="flex gap-3 items-start">
                     <span className="bg-gold/20 text-gold w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold shrink-0 mt-0.5">1</span>
                     <p className="font-crimson text-white/90 text-base leading-snug">
                       {ios
-                        ? 'Abrí esta página en Safari → tocá Compartir (□↑) → "Agregar a pantalla de inicio".'
-                        : 'Instalá la app: tocá el menú del navegador y elegí "Agregar a pantalla de inicio" o "Instalar aplicación".'}
+                        ? 'Abre esta página en Safari → toca Compartir (□↑) → "Agregar a pantalla de inicio".'
+                        : 'Instala la app: toca el menú del navegador y elige "Agregar a pantalla de inicio" o "Instalar aplicación".'}
                     </p>
                   </div>
                   <div className="h-px bg-gold/15" />
                   <div className="flex gap-3 items-start">
                     <span className="bg-gold/20 text-gold w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold shrink-0 mt-0.5">2</span>
                     <p className="font-crimson text-white/90 text-base leading-snug">
-                      Abrí la app instalada y tocá <span className="text-gold font-semibold">"Activar Notificaciones Web"</span>, aceptá el permiso.
+                      Abre la app instalada y toca <span className="text-gold font-semibold">"Activar Notificaciones Web"</span>, acepta el permiso.
                     </p>
                   </div>
                   <button onClick={() => setStep(2)} className="w-full py-3 mt-2 rounded font-cinzel text-xs tracking-widest uppercase bg-gold/10 border border-gold/30 text-gold font-bold">
@@ -417,24 +417,24 @@
                     <div className="space-y-3">
                       <p className="font-crimson text-white/70 text-sm">Para que las notificaciones lleguen con la app cerrada:</p>
                       <ul className="space-y-2 text-sm font-crimson text-white/90">
-                        <li className="flex gap-2"><span className="text-gold">1.</span>Mantené presionado el ícono de la app instalada.</li>
-                        <li className="flex gap-2"><span className="text-gold">2.</span>Tocá <span className="text-gold">Info de la app ⓘ</span>.</li>
-                        <li className="flex gap-2"><span className="text-gold">3.</span>Batería → elegí <span className="text-gold">Sin restricciones</span>.</li>
-                        <li className="flex gap-2"><span className="text-gold">4.</span>En Samsung: también desactivar "Optimización de batería".</li>
+                        <li className="flex gap-2"><span className="text-gold">1.</span>Mantén presionado el ícono de la app instalada.</li>
+                        <li className="flex gap-2"><span className="text-gold">2.</span>Toca <span className="text-gold">Info de la app ⓘ</span>.</li>
+                        <li className="flex gap-2"><span className="text-gold">3.</span>Batería → elige <span className="text-gold">Sin restricciones</span>.</li>
+                        <li className="flex gap-2"><span className="text-gold">4.</span>En Samsung: también desactiva "Optimización de batería".</li>
                       </ul>
                     </div>
                   ) : ios ? (
                     <div className="space-y-3">
                       <p className="font-crimson text-white/70 text-sm">Una vez instalada la app en pantalla de inicio:</p>
                       <ul className="space-y-2 text-sm font-crimson text-white/90">
-                        <li className="flex gap-2"><span className="text-gold">1.</span>Abrila desde el ícono (no desde Safari).</li>
-                        <li className="flex gap-2"><span className="text-gold">2.</span>Activá las notificaciones y aceptá el permiso.</li>
-                        <li className="flex gap-2"><span className="text-gold">3.</span>Ajustes del iPhone → Notificaciones → <span className="text-gold">Oriente Fraterno</span> → Activá todas.</li>
+                        <li className="flex gap-2"><span className="text-gold">1.</span>Ábrela desde el ícono (no desde Safari).</li>
+                        <li className="flex gap-2"><span className="text-gold">2.</span>Activa las notificaciones y acepta el permiso.</li>
+                        <li className="flex gap-2"><span className="text-gold">3.</span>Ajustes del iPhone → Notificaciones → <span className="text-gold">Oriente Fraterno</span> → Activa todas.</li>
                       </ul>
                     </div>
                   ) : (
                     <ul className="space-y-2 text-sm font-crimson text-white/90">
-                      <li className="flex gap-2"><span className="text-gold">•</span>Instalá desde el navegador: menú → "Instalar aplicación".</li>
+                      <li className="flex gap-2"><span className="text-gold">•</span>Instala desde el navegador: menú → "Instalar aplicación".</li>
                       <li className="flex gap-2"><span className="text-gold">•</span>Las notificaciones funcionan aunque el navegador esté cerrado.</li>
                     </ul>
                   )}
@@ -505,9 +505,9 @@
       , [events]);
 
       async function handleSave() {
-        if (!nombre.trim()) { showToast('Ingresá el nombre'); return; }
-        if (!mes || !dia)   { showToast('Seleccioná mes y día'); return; }
-        if (!tipo)          { showToast('Seleccioná el tipo de evento'); return; }
+        if (!nombre.trim()) { showToast('Ingresa el nombre'); return; }
+        if (!mes || !dia)   { showToast('Selecciona mes y día'); return; }
+        if (!tipo)          { showToast('Selecciona el tipo de evento'); return; }
         const fecha = mes.padStart(2,'0') + '-' + dia.padStart(2,'0');
         await saveEventToFirebase({ id: Date.now(), nombre: nombre.trim(), fecha, tipo });
         setNombre(''); setMes(''); setDia(''); setTipo('');
@@ -531,11 +531,11 @@
         } else {
           const err = window._lastWebPushError || '';
           if (!granted) {
-            showToast('Permiso denegado. Revisá los ajustes del navegador.');
+            showToast('Permiso denegado. Revisa los ajustes del navegador.');
           } else if (err) {
             showToast('Error: ' + err.slice(0, 60));
           } else {
-            showToast('Error al registrar. Abrí la consola (F12) y avisá el error.');
+            showToast('Error al registrar. Abre la consola (F12) e informa el error.');
           }
         }
       }
