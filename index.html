@@ -164,15 +164,10 @@
         const p = await Notification.requestPermission();
         if (p !== 'granted') return false;
       }
-      let ok = false;
-      if (isIOS() || isFirefox()) {
-        ok = await registrarWebPush(reg);
-      } else {
-        // Guardar FCM Y WebPush siempre: el servidor usa WebPush para enviar push en background
-        const fcmOk = await registrarFCM(reg);
-        const wpOk  = await registrarWebPush(reg);
-        ok = fcmOk || wpOk;
-      }
+      // Usamos WebPush puro en todos los casos.
+      // FCM no se usa porque su SDK toma control de pushManager y entra
+      // en conflicto con nuestra suscripción WebPush del servidor.
+      ok = await registrarWebPush(reg);
       // Registrar Periodic Background Sync para notificaciones cuando la app está cerrada
       if (ok && reg) {
         registerPeriodicSync(reg).catch(()=>{});
