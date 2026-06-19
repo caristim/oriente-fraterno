@@ -110,9 +110,17 @@ async function sendPushToAll(payload) {
       };
       return webpush.sendNotification(pushSub, JSON.stringify(payload))
         .then(() => ({ ok: true, ep: sub.endpoint.slice(-20) }))
-        .catch(err => {
+        .catch(async err => {
           const code = err.statusCode || err.status || '?';
           console.warn(`[Push] Falló (HTTP ${code}): ${err.message} | endpoint: ...${sub.endpoint.slice(-30)}`);
+          // HTTP 410 = suscripción expirada → eliminar de Firestore automáticamente
+          if (code === 410) {
+            try {
+              const delUrl = `${FIRESTORE_BASE}/webpush_subscriptions/${sub._id}?key=${FIREBASE_API_KEY}`;
+              await fetch(delUrl, { method: 'DELETE' });
+              console.log(`[Push] Suscripción expirada eliminada: ${sub._id}`);
+            } catch(e) { console.warn('[Push] Error eliminando suscripción expirada:', e.message); }
+          }
           return { ok: false, ep: sub.endpoint.slice(-20), err: err.message };
         });
     })
