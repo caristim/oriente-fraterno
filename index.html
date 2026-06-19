@@ -156,10 +156,18 @@
         const p = await Notification.requestPermission();
         if (p !== 'granted') return false;
       }
-      if (isIOS() || isFirefox()) return registrarWebPush(reg);
-      const ok = await registrarFCM(reg);
-      if (ok) registrarWebPush(reg).catch(()=>{});
-      else return registrarWebPush(reg);
+      let ok = false;
+      if (isIOS() || isFirefox()) {
+        ok = await registrarWebPush(reg);
+      } else {
+        ok = await registrarFCM(reg);
+        if (ok) registrarWebPush(reg).catch(()=>{});
+        else ok = await registrarWebPush(reg);
+      }
+      // Registrar Periodic Background Sync para notificaciones cuando la app está cerrada
+      if (ok && reg) {
+        registerPeriodicSync(reg).catch(()=>{});
+      }
       return ok;
     }
 
@@ -264,11 +272,28 @@
 
     // ── Service Worker ────────────────────────────────────────────────────
     let swReg = null;
+    async function registerPeriodicSync(reg) {
+      try {
+        if (!('periodicSync' in reg)) return;
+        // Periodic Background Sync requiere que la app esté instalada como PWA
+        const status = await navigator.permissions.query({ name: 'periodic-background-sync' });
+        if (status.state === 'granted') {
+          await reg.periodicSync.register('check-events', {
+            minInterval: 12 * 60 * 60 * 1000, // cada 12 horas
+          });
+          console.log('[App] Periodic Background Sync registrado (cada 12h)');
+        }
+      } catch(e) {
+        console.warn('[App] Periodic Background Sync no soportado:', e.message);
+      }
+    }
+
     async function registerSW() {
       if (!('serviceWorker' in navigator)) return null;
       try {
+        // Scope '/' cubre toda la app independientemente de la ruta de instalación
         swReg = await navigator.serviceWorker.register('./sw.js', {
-          scope: '/oriente-fraterno/', updateViaCache: 'none',
+          scope: '/', updateViaCache: 'none',
         });
         swReg.addEventListener('updatefound', () => {
           const nw = swReg.installing;
@@ -277,6 +302,9 @@
               nw.postMessage({ type:'SKIP_WAITING' });
           });
         });
+        // Esperar que el SW esté activo y registrar sync periódico
+        await navigator.serviceWorker.ready;
+        registerPeriodicSync(swReg);
         return swReg;
       } catch(e) { console.error('[App] SW error:', e.message); return null; }
     }
@@ -330,6 +358,8 @@
       const android = /Android/i.test(navigator.userAgent);
       const iosVer  = (() => { const m = navigator.userAgent.match(/OS (\d+)_/); return m ? +m[1] : null; })();
       const iosOld  = ios && iosVer !== null && iosVer < 16;
+      // iOS 16.4+ soporta Push desde PWA instalada en home screen
+      const iosOk   = ios && iosVer !== null && iosVer >= 16;
       const [step, setStep] = useState(1);
 
       return (
@@ -346,20 +376,27 @@
                 <div className="fade-in space-y-4">
                   {iosOld && (
                     <div className="bg-red-900/30 border border-red-500/40 rounded p-3">
-                      <p className="font-crimson text-red-300 text-sm">⚠️ Tu iOS ({iosVer}) no soporta notificaciones web. Actualizá a iOS 16.4+.</p>
+                      <p className="font-crimson text-red-300 text-sm">⚠️ Tu iOS ({iosVer}) no soporta notificaciones web. Actualizá a iOS 16.4+ para recibirlas.</p>
+                    </div>
+                  )}
+                  {ios && !iosOld && (
+                    <div className="bg-amber-900/30 border border-amber-600/40 rounded p-3">
+                      <p className="font-crimson text-amber-200 text-sm">📱 En iPhone/iPad debés instalar la app primero y luego activar notificaciones desde adentro.</p>
                     </div>
                   )}
                   <div className="flex gap-3 items-start">
                     <span className="bg-gold/20 text-gold w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold shrink-0 mt-0.5">1</span>
-                    <p className="font-crimson text-white/90 text-base leading-snug">Tocá <span className="text-gold font-semibold">"Activar Notificaciones Web"</span> y aceptá el permiso del navegador.</p>
+                    <p className="font-crimson text-white/90 text-base leading-snug">
+                      {ios
+                        ? 'Abrí esta página en Safari → tocá Compartir (□↑) → "Agregar a pantalla de inicio".'
+                        : 'Instalá la app: tocá el menú del navegador y elegí "Agregar a pantalla de inicio" o "Instalar aplicación".'}
+                    </p>
                   </div>
                   <div className="h-px bg-gold/15" />
                   <div className="flex gap-3 items-start">
                     <span className="bg-gold/20 text-gold w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold shrink-0 mt-0.5">2</span>
                     <p className="font-crimson text-white/90 text-base leading-snug">
-                      {ios
-                        ? 'En iOS instalá la app primero: Compartir → Agregar al inicio.'
-                        : 'Instalá la app en tu pantalla de inicio para garantizar notificaciones en segundo plano.'}
+                      Abrí la app instalada y tocá <span className="text-gold font-semibold">"Activar Notificaciones Web"</span>, aceptá el permiso.
                     </p>
                   </div>
                   <button onClick={() => setStep(2)} className="w-full py-3 mt-2 rounded font-cinzel text-xs tracking-widest uppercase bg-gold/10 border border-gold/30 text-gold font-bold">
@@ -369,18 +406,32 @@
               )}
               {step === 2 && (
                 <div className="fade-in space-y-4">
-                  <h3 className="font-cinzel text-gold text-xs tracking-widest uppercase text-center">Ajuste de Segundo Plano</h3>
+                  <h3 className="font-cinzel text-gold text-xs tracking-widest uppercase text-center">
+                    {android ? 'Permitir ejecución en segundo plano' : 'Activar notificaciones en Ajustes'}
+                  </h3>
                   {android ? (
-                    <ul className="space-y-2 text-sm font-crimson text-white/90">
-                      <li className="flex gap-2"><span>•</span>Mantené presionado el ícono de la app.</li>
-                      <li className="flex gap-2"><span>•</span>Tocá <span className="text-gold">Info de la aplicación ⓘ</span>.</li>
-                      <li className="flex gap-2"><span>•</span>Batería → elegí <span className="text-gold">Sin Restricciones</span>.</li>
-                    </ul>
+                    <div className="space-y-3">
+                      <p className="font-crimson text-white/70 text-sm">Para que las notificaciones lleguen con la app cerrada:</p>
+                      <ul className="space-y-2 text-sm font-crimson text-white/90">
+                        <li className="flex gap-2"><span className="text-gold">1.</span>Mantené presionado el ícono de la app instalada.</li>
+                        <li className="flex gap-2"><span className="text-gold">2.</span>Tocá <span className="text-gold">Info de la app ⓘ</span>.</li>
+                        <li className="flex gap-2"><span className="text-gold">3.</span>Batería → elegí <span className="text-gold">Sin restricciones</span>.</li>
+                        <li className="flex gap-2"><span className="text-gold">4.</span>En Samsung: también desactivar "Optimización de batería".</li>
+                      </ul>
+                    </div>
+                  ) : ios ? (
+                    <div className="space-y-3">
+                      <p className="font-crimson text-white/70 text-sm">Una vez instalada la app en pantalla de inicio:</p>
+                      <ul className="space-y-2 text-sm font-crimson text-white/90">
+                        <li className="flex gap-2"><span className="text-gold">1.</span>Abrila desde el ícono (no desde Safari).</li>
+                        <li className="flex gap-2"><span className="text-gold">2.</span>Activá las notificaciones y aceptá el permiso.</li>
+                        <li className="flex gap-2"><span className="text-gold">3.</span>Ajustes del iPhone → Notificaciones → <span className="text-gold">Oriente Fraterno</span> → Activá todas.</li>
+                      </ul>
+                    </div>
                   ) : (
                     <ul className="space-y-2 text-sm font-crimson text-white/90">
-                      <li className="flex gap-2"><span>•</span>Instalá desde Safari: <span className="text-gold">Compartir → Agregar al inicio</span>.</li>
-                      <li className="flex gap-2"><span>•</span>Ajustes → Notificaciones → <span className="text-gold">Oriente Fraterno</span>.</li>
-                      <li className="flex gap-2"><span>•</span>Activá todas las notificaciones.</li>
+                      <li className="flex gap-2"><span className="text-gold">•</span>Instalá desde el navegador: menú → "Instalar aplicación".</li>
+                      <li className="flex gap-2"><span className="text-gold">•</span>Las notificaciones funcionan aunque el navegador esté cerrado.</li>
                     </ul>
                   )}
                   <div className="h-px bg-gold/15" />
