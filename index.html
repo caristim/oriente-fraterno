@@ -73,26 +73,31 @@
 
     async function registrarWebPush(reg) {
       try {
-        if (!('PushManager' in window) || !db) return false;
-        // Siempre desuscribir la suscripción anterior para asegurar
-        // que se use la clave VAPID actual (evita error HTTP 401)
+        if (!('PushManager' in window)) throw new Error('PushManager no disponible en este navegador');
+        if (!db) throw new Error('Firebase no inicializado (db=null)');
+        // Desuscribir la suscripción anterior para usar la clave VAPID actual
         const existing = await reg.pushManager.getSubscription();
         if (existing) await existing.unsubscribe();
         const sub = await reg.pushManager.subscribe({
           userVisibleOnly: true,
           applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY),
         });
-        if (!sub) return false;
+        if (!sub) throw new Error('subscribe() devolvió null');
         const j = sub.toJSON();
-        if (!j.endpoint || !j.keys || !j.keys.p256dh || !j.keys.auth) return false;
+        if (!j.endpoint || !j.keys || !j.keys.p256dh || !j.keys.auth)
+          throw new Error('Suscripción incompleta: faltan keys');
         const platform = isIOS() ? 'ios' : isFirefox() ? 'firefox' : 'chromium';
         await db.collection('webpush_subscriptions').doc(hashEndpoint(j.endpoint)).set({
           endpoint: j.endpoint, p256dh: j.keys.p256dh, auth: j.keys.auth,
           platform, updatedAt: new Date().toISOString(),
         });
-        console.log('[WebPush] OK. Platform:', platform);
+        console.log('[WebPush] OK. Platform:', platform, '| endpoint:', j.endpoint.slice(-20));
         return true;
-      } catch(e) { console.error('[WebPush] Error:', e.message); return false; }
+      } catch(e) {
+        console.error('[WebPush] Error:', e.message);
+        window._lastWebPushError = e.message;
+        return false;
+      }
     }
 
     async function registrarFCM(reg) {
@@ -529,7 +534,14 @@
           await syncEventsToSW(events);
           showToast('Notificaciones activadas ✦');
         } else {
-          showToast(granted ? 'Error al registrar. Intentá de nuevo.' : 'Permiso denegado. Revisá los ajustes del navegador.');
+          const err = window._lastWebPushError || '';
+          if (!granted) {
+            showToast('Permiso denegado. Revisá los ajustes del navegador.');
+          } else if (err) {
+            showToast('Error: ' + err.slice(0, 60));
+          } else {
+            showToast('Error al registrar. Abrí la consola (F12) y avisá el error.');
+          }
         }
       }
 

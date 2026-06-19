@@ -2,7 +2,7 @@
 // SERVICE WORKER - ORIENTE FRATERNO 148
 // ==========================================
 
-const CACHE_NAME = 'oriente-fraterno-cache-v2';
+const CACHE_NAME = 'oriente-fraterno-cache-v3';
 const urlsToCache = [
   './',
   './index.html',
@@ -41,10 +41,23 @@ self.addEventListener('activate', function(event) {
   );
 });
 
-// ── Cache: Cache First / Network Fallback ─────────────────────────────────────
+// ── Cache: Network First para HTML, Cache First para el resto ─────────────────
 self.addEventListener('fetch', function(event) {
-  // Solo cachear peticiones GET al mismo origen
   if (event.request.method !== 'GET') return;
+
+  const url = new URL(event.request.url);
+
+  // HTML siempre desde la red (así los cambios de código llegan de inmediato)
+  if (url.pathname === '/' || url.pathname.endsWith('.html')) {
+    event.respondWith(
+      fetch(event.request).catch(function() {
+        return caches.match(event.request);
+      })
+    );
+    return;
+  }
+
+  // El resto: cache first con fallback a red
   event.respondWith(
     caches.match(event.request).then(function(response) {
       return response || fetch(event.request);
