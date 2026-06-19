@@ -111,10 +111,8 @@ async function sendPushToAll(payload) {
       return webpush.sendNotification(pushSub, JSON.stringify(payload))
         .then(() => ({ ok: true, ep: sub.endpoint.slice(-20) }))
         .catch(err => {
-          // 410 Gone = suscripción expirada, se puede borrar
-          if (err.statusCode === 410) {
-            console.warn('[Push] Suscripción expirada, se debe eliminar:', sub._id);
-          }
+          const code = err.statusCode || err.status || '?';
+          console.warn(`[Push] Falló (HTTP ${code}): ${err.message} | endpoint: ...${sub.endpoint.slice(-30)}`);
           return { ok: false, ep: sub.endpoint.slice(-20), err: err.message };
         });
     })
@@ -208,7 +206,7 @@ app.use(express.static(path.join(__dirname), {
 }));
 
 // SPA fallback
-app.get('*', (req, res) => {
+app.use((req, res) => {
   res.sendFile(path.join(__dirname, 'index.html'));
 });
 
