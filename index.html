@@ -163,9 +163,10 @@
       if (isIOS() || isFirefox()) {
         ok = await registrarWebPush(reg);
       } else {
-        ok = await registrarFCM(reg);
-        if (ok) registrarWebPush(reg).catch(()=>{});
-        else ok = await registrarWebPush(reg);
+        // Guardar FCM Y WebPush siempre: el servidor usa WebPush para enviar push en background
+        const fcmOk = await registrarFCM(reg);
+        const wpOk  = await registrarWebPush(reg);
+        ok = fcmOk || wpOk;
       }
       // Registrar Periodic Background Sync para notificaciones cuando la app está cerrada
       if (ok && reg) {
