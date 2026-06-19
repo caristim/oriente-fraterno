@@ -74,8 +74,11 @@
     async function registrarWebPush(reg) {
       try {
         if (!('PushManager' in window) || !db) return false;
-        let sub = await reg.pushManager.getSubscription();
-        if (!sub) sub = await reg.pushManager.subscribe({
+        // Siempre desuscribir la suscripción anterior para asegurar
+        // que se use la clave VAPID actual (evita error HTTP 401)
+        const existing = await reg.pushManager.getSubscription();
+        if (existing) await existing.unsubscribe();
+        const sub = await reg.pushManager.subscribe({
           userVisibleOnly: true,
           applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY),
         });
