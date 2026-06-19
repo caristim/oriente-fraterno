@@ -13,7 +13,7 @@ const app  = express();
 const PORT = 5000;
 
 // ── VAPID ────────────────────────────────────────────────────────────────────
-const VAPID_PUBLIC_KEY  = 'BM1SqlyjKhW45Y2JSBqDTYRT5QBV0yduJBtonc_QrlqM1DgaDmanz_w1R0Qj40ZuiG-rz4s4stIqBuYmciutG9Y';
+const VAPID_PUBLIC_KEY  = 'BNrCEJzq3O8KEEELwyOeRiHQU3911ptH6DYQ_2JuqYXim68Hw12IUfd8Z9dfz9kCEgyNKrNzPLrm0hzrz9UORKI';
 const VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY;
 
 if (!VAPID_PRIVATE_KEY) {
