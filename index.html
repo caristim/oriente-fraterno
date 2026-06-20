@@ -72,7 +72,6 @@
         if (!('PushManager' in window)) throw new Error('PushManager no disponible en este navegador');
         if (!db) throw new Error('Firebase no inicializado (db=null)');
         
-        // Desuscribir la suscripción anterior para usar la clave VAPID actual
         const existing = await reg.pushManager.getSubscription();
         if (existing) await existing.unsubscribe();
         
@@ -134,7 +133,6 @@
         const p = await Notification.requestPermission();
         if (p !== 'granted') return false;
       }
-      // Solo Web Push puro - sin FCM
       return await registrarWebPush(reg);
     }
 
@@ -307,7 +305,6 @@
       const android = /Android/i.test(navigator.userAgent);
       const iosVer  = (() => { const m = navigator.userAgent.match(/OS (\d+)_/); return m ? +m[1] : null; })();
       const iosOld  = ios && iosVer !== null && iosVer < 16;
-      const iosOk   = ios && iosVer !== null && iosVer >= 16;
       const [step, setStep] = useState(1);
 
       return (
@@ -524,3 +521,45 @@
                     className="w-full bg-navy/70 border gold-border rounded px-3 py-2.5 text-white font-crimson text-base placeholder-white/25 focus:outline-none gold-glow focus:border-gold/70 transition" />
                 </div>
                 <div className="flex gap-2">
+                  <select value={mes} onChange={e => setMes(e.target.value)}
+                    className="flex-1 bg-navy/70 border gold-border rounded px-3 py-2.5 text-white font-crimson text-base focus:outline-none">
+                    <option value="">— Mes —</option>
+                    {['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'].map((m,i) => (
+                      <option key={i+1} value={String(i+1).padStart(2,'0')}>{m}</option>
+                    ))}
+                  </select>
+                  <select value={dia} onChange={e => setDia(e.target.value)}
+                    className="w-28 bg-navy/70 border gold-border rounded px-3 py-2.5 text-white font-crimson text-base focus:outline-none">
+                    <option value="">— Día —</option>
+                    {Array.from({ length: mes ? [31,29,31,30,31,30,31,31,30,31,30,31][+mes-1] : 31 }, (_,i) => i+1).map(d => (
+                      <option key={d} value={String(d).padStart(2,'0')}>{d}</option>
+                    ))}
+                  </select>
+                </div>
+                <select value={tipo} onChange={e => setTipo(e.target.value)}
+                  className="w-full bg-navy/70 border gold-border rounded px-3 py-2.5 text-white font-crimson text-base focus:outline-none">
+                  <option value="">— Seleccionar evento —</option>
+                  {TIPOS.map(t => <option key={t.value} value={t.value}>{t.emoji} {t.value}</option>)}
+                </select>
+                <button onClick={handleSave}
+                  className="w-full py-3 rounded font-cinzel text-xs tracking-widest uppercase bg-gradient-to-r from-gold via-gold-light to-gold text-navy font-bold shadow-lg shadow-gold/20 flex items-center justify-center gap-2">
+                  <Icon name="PlusCircle" size={15} color="#1e2d4a" /> Registrar Evento
+                </button>
+              </div>
+            </Card>
+
+            <Divider label={'Eventos Registrados (' + sorted.length + ')'} />
+            <Card className="p-3">
+              {sorted.length === 0
+                ? <div className="text-center py-12 text-white/25 italic text-sm">No hay eventos registrados aún.</div>
+                : <div className="space-y-2">
+                    {sorted.map(ev => {
+                      const cfg  = TIPOS.find(t => t.value === ev.tipo) || { emoji:'📌' };
+                      const days = daysUntil(ev.fecha);
+                      return (
+                        <div key={ev.docId || ev.id} className={'flex items-center gap-3 p-3 rounded border ' + (TIPO_STYLES[ev.tipo] || 'bg-navy/50 border-white/10')}>
+                          <div className="w-10 h-10 rounded-full border border-gold/20 flex items-center justify-center text-lg bg-black/20 shrink-0">{cfg.emoji}</div>
+                          <div className="flex-1 min-w-0">
+                            <p className="font-cinzel text-white text-sm font-semibold truncate">{ev.nombre}</p>
+                            <p className="text-gold text-xs uppercase">{ev.tipo} · {formatDate(ev.fecha)}</p>
+                            <p className="text-white/40 text-xs">{days === 0 ?
