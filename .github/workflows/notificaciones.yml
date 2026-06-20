@@ -1,1 +1,29 @@
+name: Notificaciones Diarias - Oriente Fraterno 148
 
+on:
+  schedule:
+    # 9:00 AM Uruguay (UTC-3) = 12:00 UTC
+    - cron: '0 12 * * *'
+  workflow_dispatch:  # Para pruebas manuales
+
+jobs:
+  enviar-notificaciones:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    
+    steps:
+      - name: Clonar repositorio
+        uses: actions/checkout@v4
+        
+      - name: Configurar Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          
+      - name: Instalar dependencias
+        run: npm install web-push
+        
+      - name: Enviar notificaciones
+        env:
+          VAPID_PRIVATE_KEY: ${{ secrets.VAPID_PRIVATE_KEY }}
+        run: node scripts/enviar-notificaciones.js
