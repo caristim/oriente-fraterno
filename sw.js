@@ -1,6 +1,5 @@
 // ==========================================
 // SERVICE WORKER - ORIENTE FRATERO 148
-// Versión simplificada - Solo Web Push
 // ==========================================
 
 const CACHE_NAME = 'oriente-fraterno-cache-v3';
