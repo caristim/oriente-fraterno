@@ -1,7 +1,3 @@
-// ==========================================
-// SERVICE WORKER - ORIENTE FRATERO 148
-// ==========================================
-
 const CACHE_NAME = 'oriente-fraterno-cache-v3';
 const urlsToCache = [
   './',
@@ -11,7 +7,6 @@ const urlsToCache = [
   './icon-512.png'
 ];
 
-// ── Instalación ───────────────────────────────────────────────────────────────
 self.addEventListener('install', function(event) {
   self.skipWaiting();
   event.waitUntil(
@@ -21,7 +16,6 @@ self.addEventListener('install', function(event) {
   );
 });
 
-// ── Activación ────────────────────────────────────────────────────────────────
 self.addEventListener('activate', function(event) {
   event.waitUntil(
     Promise.all([
@@ -39,7 +33,6 @@ self.addEventListener('activate', function(event) {
   );
 });
 
-// ── Cache: Network First para HTML ────────────────────────────────────────────
 self.addEventListener('fetch', function(event) {
   if (event.request.method !== 'GET') return;
   const url = new URL(event.request.url);
@@ -60,7 +53,6 @@ self.addEventListener('fetch', function(event) {
   );
 });
 
-// ── Push desde el servidor/GitHub Actions ─────────────────────────────────────
 self.addEventListener('push', function(event) {
   let data = { 
     title: 'Oriente Fraterno · 148', 
@@ -92,7 +84,6 @@ self.addEventListener('push', function(event) {
   );
 });
 
-// ── Clic en notificación ──────────────────────────────────────────────────────
 self.addEventListener('notificationclick', function(event) {
   event.notification.close();
 
