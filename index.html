@@ -29,7 +29,7 @@
   <!-- React + Babel -->
   <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
- <script src="https://unpkg.com/@babel/standalone@7.26.2/babel.min.js"></script>
+  <script src="https://unpkg.com/@babel/standalone@7.26.2/babel.min.js"></script>
 
   <!-- Firebase SDK -->
   <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
@@ -203,7 +203,6 @@
     const STORAGE_KEY = 'orienteFraterno_v2';
 
     // ── SVG Icons inline (sin dependencia de lucide) ───────────────────────
-    // Elimina la dependencia de lucide que causaba el error de importScripts.
     const SVG_ICONS = {
       Bell: '<path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/>',
       BellRing: '<path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/><line x1="2" y1="8" x2="2.01" y2="8"/><line x1="22" y1="8" x2="22.01" y2="8"/>',
@@ -421,6 +420,21 @@
           }
         })();
       }, []);
+
+      // ✅ NUEVO: Renovar suscripciones automáticamente al volver a primer plano
+      useEffect(() => {
+        const handleVisibilityChange = () => {
+          if (document.visibilityState === 'visible' && swReg) {
+            window._renovarRegistros(swReg).catch(() => {});
+          }
+        };
+        document.addEventListener('visibilitychange', handleVisibilityChange);
+        // También al montar, si ya hay SW
+        if (swReg) {
+          window._renovarRegistros(swReg).catch(() => {});
+        }
+        return () => document.removeEventListener('visibilitychange', handleVisibilityChange);
+      }, [swReg]);
 
       // Suscripción Firestore en tiempo real
       useEffect(() => {
