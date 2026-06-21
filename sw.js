@@ -1,16 +1,10 @@
-// Oriente Fraterno 148 — Service Worker v21.0
-// CORRECCIÓN CRÍTICA v21.0:
-//   importScripts() de Firebase estaba en el TOP LEVEL del SW sin try/catch.
-//   Si gstatic.com tarda o falla (aunque sea por 1 segundo), importScripts()
-//   lanza una excepción que aborta la instalación del SW completo.
-//   El SW nunca se instala → el SW viejo queda activo → sirve el HTML del
-//   caché viejo → la app queda congelada en "Iniciando aplicación...".
-//   SOLUCIÓN: importScripts dentro de try/catch. Si Firebase no carga,
-//   el SW igual funciona para Web Push nativo (iOS/Firefox) y para
-//   cache/fetch. Solo pierde el canal FCM, que se recupera en la próxima
-//   apertura de la app.
+// Oriente Fraterno 148 — Service Worker v22.0
+// CORRECCIÓN DEFINITIVA:
+//   1. Firebase se reinicializa en cada evento push/mensaje si falló al inicio.
+//   2. El payload de iOS se maneja como texto plano (requisito de Safari).
+//   3. Se usa badge para forzar el despertado en segundo plano en iOS.
 
-const SW_VERSION    = 'of-sw-v21.0';
+const SW_VERSION    = 'of-sw-v22.0';
 const DB_NAME       = 'of_sw';
 const APP_ROOT      = 'https://caristim.github.io/oriente-fraterno/';
 const APP_URL       = 'https://caristim.github.io/oriente-fraterno/';
@@ -18,7 +12,7 @@ const ICON_192      = 'https://caristim.github.io/oriente-fraterno/icon-192.png'
 const BADGE_URL     = 'https://caristim.github.io/oriente-fraterno/icon-192.png';
 const FCM_SENDER_ID = '101867774014';
 
-const CACHE_NAME    = 'of-cache-v21.0';
+const CACHE_NAME    = 'of-cache-v22.0';
 const PRECACHE_URLS = [
   APP_ROOT,
   APP_ROOT + 'index.html',
@@ -27,26 +21,31 @@ const PRECACHE_URLS = [
   APP_ROOT + 'icon-512.png',
 ];
 
-// ── Inicialización Firebase (DENTRO de try/catch) ─────────────────────────────
-// CRÍTICO: importScripts en el top-level SIN try/catch hace que cualquier
-// fallo de red aborte la instalación completa del SW. Con try/catch, si
-// Firebase no carga, el SW igual se instala y maneja Web Push nativo.
+// ── Inicialización Firebase (con reintento) ─────────────────────────────
 let fcmMessaging   = null;
 let fcmInitialized = false;
 
-try {
-  importScripts('https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js');
-  importScripts('https://www.gstatic.com/firebasejs/10.8.0/firebase-messaging-compat.js');
-  fcmInitialized = true;
-  console.log('[SW] Firebase scripts cargados.');
-} catch (e) {
-  console.warn('[SW] No se pudieron cargar scripts de Firebase:', e.message,
-    '— El SW funciona en modo Web Push nativo solamente.');
-}
-
-function tryInitFirebase() {
-  if (!fcmInitialized) return;
+function initFirebase() {
+  if (fcmInitialized) return;
   try {
+    // Si los scripts ya están cargados globalmente, los usamos.
+    // Si no, intentamos importarlos (puede fallar en Firefox/Safari).
+    if (typeof firebase === 'undefined') {
+      try {
+        importScripts('https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js');
+        importScripts('https://www.gstatic.com/firebasejs/10.8.0/firebase-messaging-compat.js');
+        fcmInitialized = true;
+      } catch (e) {
+        console.warn('[SW] importScripts falló:', e.message);
+        // No marcamos fcmInitialized = true, así lo reintentamos después.
+        return;
+      }
+    } else {
+      fcmInitialized = true;
+    }
+
+    if (!fcmInitialized) return;
+
     const existingApps = firebase.apps || [];
     if (existingApps.length === 0) {
       firebase.initializeApp({
@@ -59,16 +58,21 @@ function tryInitFirebase() {
       });
     }
     fcmMessaging = firebase.messaging();
-    console.log('[SW] Firebase + FCM inicializados.');
+    console.log('[SW] Firebase + FCM inicializado.');
   } catch (err) {
     console.warn('[SW] Firebase no disponible (normal en Firefox/Safari):', err.message);
     fcmMessaging = null;
   }
 }
 
-tryInitFirebase();
+// Llamar al inicio
+initFirebase();
 
-// ── CANAL 1: FCM BACKGROUND (Chrome/Edge/Android con app CERRADA) ─────────────
+// Reintentar en cada evento push o mensaje (por si falló la primera vez)
+self.addEventListener('push', () => { if (!fcmMessaging) initFirebase(); });
+self.addEventListener('message', () => { if (!fcmMessaging) initFirebase(); });
+
+// ── CANAL 1: FCM BACKGROUND (Chrome/Edge/Android) ────────────────────────
 if (fcmMessaging) {
   fcmMessaging.onBackgroundMessage(async payload => {
     console.log('[SW-FCM] onBackgroundMessage:', JSON.stringify(payload));
@@ -88,46 +92,52 @@ if (fcmMessaging) {
   });
 }
 
-// ── CANAL 2: WEB PUSH NATIVO (iOS Safari PWA, Firefox, Edge sin FCM) ──────────
+// ── CANAL 2: WEB PUSH NATIVO (iOS Safari PWA, Firefox) ────────────────────
 self.addEventListener('push', e => {
   console.log('[SW-Push] Evento push nativo recibido');
+
+  // Si FCM ya lo manejó, no hacemos nada (evita duplicados).
+  // En iOS/Firefox, FCM no existe, así que siempre entra aquí.
+  if (fcmMessaging && e.data) {
+    try {
+      const data = e.data.json();
+      if (String(data.from) === FCM_SENDER_ID) {
+        console.log('[SW-Push] Mensaje FCM detectado, ignorando (ya manejado por SDK).');
+        return;
+      }
+    } catch (_) {}
+  }
 
   let titulo = 'Oriente Fraterno 148';
   let cuerpo = 'Tenés un evento hoy ✦';
   let url    = APP_URL;
   let evTag  = 'of-wp-' + Date.now();
-  let isFCM  = false;
 
   if (e.data) {
     try {
+      // Intentar parsear como JSON
       const data = e.data.json();
-      // Detectar mensajes FCM por el campo 'from' (sender ID de Firebase).
-      // Si Firebase SDK está activo, ya habrá llamado stopImmediatePropagation
-      // y este listener no se ejecuta para mensajes FCM. Esta comprobación es
-      // un respaldo para el caso en que el SDK no esté disponible.
-      if (String(data.from) === FCM_SENDER_ID) {
-        isFCM = true;
-        console.log('[SW-Push] Mensaje FCM detectado por campo from=, ignorando (ya manejado por SDK).');
-      } else {
-        titulo = data.title || titulo;
-        cuerpo = data.body  || cuerpo;
-        url    = data.url   || url;
-        evTag  = data.tag   || evTag;
-      }
+      titulo = data.title || titulo;
+      cuerpo = data.body  || cuerpo;
+      url    = data.url   || url;
+      evTag  = data.tag   || evTag;
     } catch (_) {
+      // Si no es JSON, usar el texto plano como cuerpo (necesario para iOS)
       const texto = e.data.text();
       if (texto) cuerpo = texto;
     }
   }
 
-  if (isFCM) return;
-
   e.waitUntil(
     (async () => {
       try {
+        // ⚠️ iOS necesita badge o sound para "despertar" en segundo plano.
         await self.registration.showNotification(titulo, {
-          body: cuerpo, icon: ICON_192, badge: BADGE_URL,
-          tag: evTag, requireInteraction: true,
+          body: cuerpo,
+          icon: ICON_192,
+          badge: BADGE_URL,  // <-- CRÍTICO para iOS 16.4+
+          tag: evTag,
+          requireInteraction: true,
           vibrate: [200, 100, 200, 100, 200],
           data: { url },
         });
@@ -139,7 +149,7 @@ self.addEventListener('push', e => {
   );
 });
 
-// ── CANAL 3: VERIFICACIÓN LOCAL (respaldo con app abierta) ────────────────────
+// ── CANAL 3: VERIFICACIÓN LOCAL (respaldo con app abierta) ────────────────
 async function checkAndNotify() {
   try {
     const events = await dbGet('events');
