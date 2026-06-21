@@ -1,4 +1,4 @@
-name: Notificaciones Diarias - Oriente Fraterno 148
+name: Notificaciones Diarias
 
 on:
   schedule:
@@ -6,10 +6,8 @@ on:
   workflow_dispatch:
 
 jobs:
-  enviar-notificaciones:
+  enviar:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
-    
     steps:
       - name: Clonar repositorio
         uses: actions/checkout@v4
@@ -19,10 +17,10 @@ jobs:
         with:
           node-version: '22'
           
-      - name: Instalar dependencias
+      - name: Instalar web-push
         run: npm install web-push
         
-      - name: Enviar notificaciones
+      - name: Ejecutar notificador
+        run: node scripts/enviar-notificaciones.js
         env:
           VAPID_PRIVATE_KEY: ${{ secrets.VAPID_PRIVATE_KEY }}
-        run: node scripts/enviar-notificaciones.js
