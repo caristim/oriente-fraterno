@@ -1,5 +1,3 @@
-#!/usr/bin/env node
-
 const webpush = require('web-push');
 const https = require('https');
 
@@ -8,6 +6,7 @@ const VAPID_PRIVATE_KEY = process.env.VAPID_PRIVATE_KEY;
 
 if (!VAPID_PRIVATE_KEY) {
   console.error('❌ VAPID_PRIVATE_KEY no configurada');
+  console.error('   Configúrala en: Settings → Secrets and variables → Actions');
   process.exit(1);
 }
 
@@ -36,21 +35,25 @@ function firestoreGet(collection) {
             resolve(json.documents || []);
           }
         } catch (e) {
-          reject(e);
+          reject(new Error(`Error parseando JSON: ${e.message}`));
         }
       });
-    }).on('error', reject);
+    }).on('error', (e) => {
+      reject(new Error(`Error de red: ${e.message}`));
+    });
   });
 }
 
 function parseFirestoreDoc(doc) {
   const fields = doc.fields || {};
   const result = { id: doc.name.split('/').pop() };
+  
   for (const [key, value] of Object.entries(fields)) {
     if (value.stringValue !== undefined) result[key] = value.stringValue;
     else if (value.integerValue !== undefined) result[key] = Number(value.integerValue);
     else if (value.doubleValue !== undefined) result[key] = Number(value.doubleValue);
     else if (value.booleanValue !== undefined) result[key] = value.booleanValue;
+    else if (value.timestampValue !== undefined) result[key] = value.timestampValue;
   }
   return result;
 }
@@ -84,13 +87,23 @@ function getEmojiForTipo(tipo) {
 
 async function sendNotification(subscription, title, body, tag) {
   try {
-    const payload = JSON.stringify({ title, body, url: '/', tag });
-    await webpush.sendNotification(subscription, payload, { TTL: 86400, urgency: 'high' });
-    console.log(`✅ Enviado a: ${subscription.endpoint.substring(0, 50)}...`);
+    const payload = JSON.stringify({ 
+      title, 
+      body, 
+      url: 'https://caristim.github.io/oriente-fraterno/',
+      tag 
+    });
+    
+    await webpush.sendNotification(subscription, payload, { 
+      TTL: 86400, 
+      urgency: 'high' 
+    });
+    
+    console.log(`  ✅ Enviado correctamente`);
     return { success: true };
   } catch (error) {
     const isInvalid = error.statusCode === 404 || error.statusCode === 410;
-    console.log(`❌ Falló (${error.statusCode || 'unknown'}): ${isInvalid ? 'suscripción inválida' : error.message}`);
+    console.log(`  ❌ Falló (${error.statusCode || 'unknown'}): ${isInvalid ? 'suscripción inválida' : error.message}`);
     return { success: false, invalid: isInvalid };
   }
 }
@@ -102,73 +115,91 @@ async function main() {
   console.log(`📅 Fecha mañana: ${getTomorrowDate()}`);
   console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
 
+  // 1. Obtener eventos
   console.log('\n📖 Leyendo eventos de Firestore...');
-  let eventosDocs = [];
+  let eventos = [];
   try {
-    eventosDocs = await firestoreGet('eventos');
+    const docs = await firestoreGet('eventos');
+    eventos = docs.map(parseFirestoreDoc);
+    console.log(`📊 Total eventos en Firestore: ${eventos.length}`);
   } catch (error) {
-    console.error('❌ Error:', error.message);
+    console.error('❌ Error leyendo eventos:', error.message);
     process.exit(1);
   }
-
-  const eventos = eventosDocs.map(parseFirestoreDoc);
-  console.log(`📊 Total eventos: ${eventos.length}`);
 
   const hoy = eventos.filter(e => e.fecha === getTodayDate());
   const manana = eventos.filter(e => e.fecha === getTomorrowDate());
 
+  console.log(`📅 Eventos hoy: ${hoy.length}`);
+  console.log(`📅 Eventos mañana: ${manana.length}`);
+
   if (hoy.length === 0 && manana.length === 0) {
-    console.log('\n✨ No hay eventos para hoy o mañana.');
+    console.log('\n✨ No hay eventos para hoy o mañana. Fin.');
     return;
   }
 
-  console.log('\n📖 Leyendo suscripciones...');
-  let subDocs = [];
+  // 2. Obtener suscripciones
+  console.log('\n📖 Leyendo suscripciones Web Push...');
+  let subs = [];
   try {
-    subDocs = await firestoreGet('webpush_subscriptions');
+    const docs = await firestoreGet('webpush_subscriptions');
+    subs = docs.map(parseFirestoreDoc).filter(s => s.endpoint && s.p256dh && s.auth);
+    console.log(`📱 Dispositivos registrados: ${subs.length}`);
   } catch (error) {
-    console.error('❌ Error:', error.message);
+    console.error('❌ Error leyendo suscripciones:', error.message);
     process.exit(1);
   }
 
-  const subscriptions = subDocs.map(parseFirestoreDoc)
-    .filter(s => s.endpoint && s.p256dh && s.auth);
-
-  console.log(`📱 Dispositivos: ${subscriptions.length}`);
-
-  if (subscriptions.length === 0) {
-    console.log('\n⚠️ No hay dispositivos registrados.');
+  if (subs.length === 0) {
+    console.log('\n⚠️ No hay dispositivos registrados para notificar.');
+    console.log('💡 Los usuarios deben abrir la app y activar notificaciones.');
     return;
   }
 
+  // 3. Enviar notificaciones
   console.log('\n📨 Enviando notificaciones...');
 
-  const eventosParaNotificar = [...hoy, ...manana];
-  for (const evento of eventosParaNotificar) {
-    const isHoy = hoy.includes(evento);
-    const cuando = isHoy ? 'Hoy' : 'Mañana';
-    const emoji = getEmojiForTipo(evento.tipo);
+  const todosLosEventos = [...hoy, ...manana];
+  let enviados = 0;
+  let fallidos = 0;
+
+  for (const ev of todosLosEventos) {
+    const cuando = hoy.includes(ev) ? 'Hoy' : 'Mañana';
+    const emoji = getEmojiForTipo(ev.tipo);
     const title = 'Oriente Fraterno · 148';
-    const body = `${emoji} ${cuando}: ${evento.tipo} de ${evento.nombre}`;
-    const tag = `evento-${evento.id || Date.now()}`;
+    const body = `${emoji} ${cuando}: ${ev.tipo} de ${ev.nombre}`;
+    const tag = `evento-${ev.id || Date.now()}`;
 
     console.log(`\n📌 ${body}`);
 
-    for (const sub of subscriptions) {
+    for (const sub of subs) {
       const pushSub = {
         endpoint: sub.endpoint,
-        keys: { p256dh: sub.p256dh, auth: sub.auth }
+        keys: {
+          p256dh: sub.p256dh,
+          auth: sub.auth
+        }
       };
-      await sendNotification(pushSub, title, body, tag);
+
+      const result = await sendNotification(pushSub, title, body, tag);
+      if (result.success) {
+        enviados++;
+      } else {
+        fallidos++;
+      }
     }
   }
 
   console.log('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
   console.log('✅ Proceso completado.');
+  console.log(`   ✅ Enviados: ${enviados}`);
+  console.log(`   ❌ Fallidos: ${fallidos}`);
+  console.log(`   📱 Dispositivos: ${subs.length}`);
   console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
 }
 
 main().catch(error => {
-  console.error('❌ Error fatal:', error);
+  console.error('\n❌ Error fatal:', error.message);
+  console.error(error.stack);
   process.exit(1);
 });
