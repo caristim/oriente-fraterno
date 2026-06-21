@@ -31,7 +31,7 @@
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
   <script src="https://unpkg.com/@babel/standalone@7.26.2/babel.min.js"></script>
 
-  <!-- Firebase SDK (solo Firestore) -->
+  <!-- Firebase SDK (SOLO Firestore - SIN FCM) -->
   <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore-compat.js"></script>
 
@@ -562,4 +562,20 @@
                           <div className="flex-1 min-w-0">
                             <p className="font-cinzel text-white text-sm font-semibold truncate">{ev.nombre}</p>
                             <p className="text-gold text-xs uppercase">{ev.tipo} · {formatDate(ev.fecha)}</p>
-                            <p className="text-white/40 text-xs">{days === 0 ?
+                            <p className="text-white/40 text-xs">{days === 0 ? 'HOY ✦' : 'En ' + days + ' días'}</p>
+                          </div>
+                          <button onClick={() => handleDelete(ev)} className="p-1.5 text-red-500/60 hover:text-red-400 shrink-0">
+                            <Icon name="Trash2" size={14} />
+                          </button>
+                        </div>
+                      );
+                    })}
+                  </div>
+              }
+            </Card>
+          </main>
+
+          <footer className="text-center pb-8 pt-2">
+            <p className="font-cinzel text-gold/25 text-xs tracking-[0.2em] uppercase">✦ A L:. G:. A:. D:. U:. ✦</p>
+            <p className="font-cinzel text-gold/20 text-xs tracking-widest uppercase mt-2">Creación: H.'. C. E. A. D. 2026</p>
+          </
