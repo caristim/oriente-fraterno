@@ -29,15 +29,16 @@
   <!-- React + Babel -->
   <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
   <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-  <script src="https://unpkg.com/@babel/standalone@7.26.2/babel.min.js"></script>
+ <script src="https://unpkg.com/@babel/standalone@7.26.2/babel.min.js"></script>
 
-  <!-- Firebase SDK (SOLO Firestore) -->
+  <!-- Firebase SDK -->
   <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore-compat.js"></script>
+  <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-messaging-compat.js"></script>
 
   <!-- ── Lógica de Firebase + Notificaciones ──────────────────────────── -->
   <script>
-    const VAPID_PUBLIC_KEY = 'BNrCEJzq3O8KEEELwyOeRiHQU3911ptH6DYQ_2JuqYXim68Hw12IUfd8Z9dfz9kCEgyNKrNzPLrm0hzrz9UORKI';
+    const VAPID_PUBLIC_KEY = 'BM1SqlyjKhW45Y2JSBqDTYRT5QBV0yduJBtonc_QrlqM1DgaDmanz_w1R0Qj40ZuiG-rz4s4stIqBuYmciutG9Y';
 
     let db = null;
     try {
@@ -54,13 +55,16 @@
 
     function isIOS()     { return /iPhone|iPad|iPod/i.test(navigator.userAgent); }
     function isFirefox() { return /firefox/i.test(navigator.userAgent); }
-    
+    function isFCMCapable() {
+      return !isIOS() && !isFirefox()
+          && typeof firebase !== 'undefined'
+          && typeof firebase.messaging === 'function';
+    }
     function urlBase64ToUint8Array(b64) {
       const pad  = '='.repeat((4 - b64.length % 4) % 4);
       const base = (b64 + pad).replace(/-/g,'+').replace(/_/g,'/');
       return Uint8Array.from(atob(base), c => c.charCodeAt(0));
     }
-    
     function hashEndpoint(ep) {
       let h = 0;
       for (let i = 0; i < ep.length; i++) h = Math.imul(31,h) + ep.charCodeAt(i) | 0;
@@ -69,44 +73,66 @@
 
     async function registrarWebPush(reg) {
       try {
-        if (!('PushManager' in window)) throw new Error('PushManager no disponible en este navegador');
-        if (!db) throw new Error('Firebase no inicializado (db=null)');
-        
-        const existing = await reg.pushManager.getSubscription();
-        if (existing) await existing.unsubscribe();
-        
-        const sub = await reg.pushManager.subscribe({
+        if (!('PushManager' in window) || !db) return false;
+        let sub = await reg.pushManager.getSubscription();
+        if (!sub) sub = await reg.pushManager.subscribe({
           userVisibleOnly: true,
           applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY),
         });
-        
-        if (!sub) throw new Error('subscribe() devolvió null');
-        
+        if (!sub) return false;
         const j = sub.toJSON();
-        if (!j.endpoint || !j.keys || !j.keys.p256dh || !j.keys.auth)
-          throw new Error('Suscripción incompleta: faltan keys');
-        
+        if (!j.endpoint || !j.keys || !j.keys.p256dh || !j.keys.auth) return false;
         const platform = isIOS() ? 'ios' : isFirefox() ? 'firefox' : 'chromium';
-        
         await db.collection('webpush_subscriptions').doc(hashEndpoint(j.endpoint)).set({
-          endpoint: j.endpoint, 
-          p256dh: j.keys.p256dh, 
-          auth: j.keys.auth,
-          platform, 
-          updatedAt: new Date().toISOString(),
+          endpoint: j.endpoint, p256dh: j.keys.p256dh, auth: j.keys.auth,
+          platform, updatedAt: new Date().toISOString(),
         });
-        
-        console.log('[WebPush] OK. Platform:', platform, '| endpoint:', j.endpoint.slice(-20));
+        console.log('[WebPush] OK. Platform:', platform);
         return true;
-      } catch(e) {
-        console.error('[WebPush] Error:', e.message);
-        window._lastWebPushError = e.message;
-        return false;
-      }
+      } catch(e) { console.error('[WebPush] Error:', e.message); return false; }
+    }
+
+    async function registrarFCM(reg) {
+      try {
+        if (!isFCMCapable() || !db) return false;
+        const messaging = firebase.messaging();
+        const token = await messaging.getToken({
+          vapidKey: VAPID_PUBLIC_KEY, serviceWorkerRegistration: reg,
+        });
+        if (!token) return false;
+        const prev = localStorage.getItem('fcm_token');
+        if (prev && prev !== token) {
+          try { await db.collection('fcm_tokens').doc(prev).delete(); } catch(_) {}
+        }
+        await db.collection('fcm_tokens').doc(token).set({
+          token, platform: 'chromium', updatedAt: new Date().toISOString(),
+        });
+        localStorage.setItem('fcm_token', token);
+        console.log('[FCM] Token OK:', token.substring(0,20) + '...');
+        return true;
+      } catch(e) { console.error('[FCM] Error:', e.message); return false; }
     }
 
     async function renovarRegistros(reg) {
       if (!db) return;
+      if (isFCMCapable()) {
+        try {
+          const messaging = firebase.messaging();
+          const token = await messaging.getToken({
+            vapidKey: VAPID_PUBLIC_KEY, serviceWorkerRegistration: reg,
+          });
+          if (token) {
+            const prev = localStorage.getItem('fcm_token');
+            if (prev && prev !== token) {
+              try { await db.collection('fcm_tokens').doc(prev).delete(); } catch(_) {}
+            }
+            await db.collection('fcm_tokens').doc(token).set({
+              token, platform: 'chromium', updatedAt: new Date().toISOString(),
+            });
+            localStorage.setItem('fcm_token', token);
+          }
+        } catch(e) { console.warn('[FCM] Renovación falló:', e.message); }
+      }
       if ('PushManager' in window) {
         try {
           const sub = await reg.pushManager.getSubscription();
@@ -115,11 +141,8 @@
             if (j.endpoint && j.keys && j.keys.p256dh && j.keys.auth) {
               const platform = isIOS() ? 'ios' : isFirefox() ? 'firefox' : 'chromium';
               await db.collection('webpush_subscriptions').doc(hashEndpoint(j.endpoint)).set({
-                endpoint: j.endpoint, 
-                p256dh: j.keys.p256dh, 
-                auth: j.keys.auth,
-                platform, 
-                updatedAt: new Date().toISOString(),
+                endpoint: j.endpoint, p256dh: j.keys.p256dh, auth: j.keys.auth,
+                platform, updatedAt: new Date().toISOString(),
               });
             }
           }
@@ -133,7 +156,11 @@
         const p = await Notification.requestPermission();
         if (p !== 'granted') return false;
       }
-      return await registrarWebPush(reg);
+      if (isIOS() || isFirefox()) return registrarWebPush(reg);
+      const ok = await registrarFCM(reg);
+      if (ok) registrarWebPush(reg).catch(()=>{});
+      else return registrarWebPush(reg);
+      return ok;
     }
 
     window._activarNotificaciones = activarNotificaciones;
@@ -175,7 +202,8 @@
     const { useState, useEffect, useCallback, useRef, useMemo } = React;
     const STORAGE_KEY = 'orienteFraterno_v2';
 
-    // ── SVG Icons inline ───────────────────────────────────────────────────────
+    // ── SVG Icons inline (sin dependencia de lucide) ───────────────────────
+    // Elimina la dependencia de lucide que causaba el error de importScripts.
     const SVG_ICONS = {
       Bell: '<path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/>',
       BellRing: '<path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/><line x1="2" y1="8" x2="2.01" y2="8"/><line x1="22" y1="8" x2="22.01" y2="8"/>',
@@ -236,12 +264,11 @@
 
     // ── Service Worker ────────────────────────────────────────────────────
     let swReg = null;
-
     async function registerSW() {
       if (!('serviceWorker' in navigator)) return null;
       try {
         swReg = await navigator.serviceWorker.register('./sw.js', {
-          scope: '/', updateViaCache: 'none',
+          scope: '/oriente-fraterno/', updateViaCache: 'none',
         });
         swReg.addEventListener('updatefound', () => {
           const nw = swReg.installing;
@@ -250,11 +277,9 @@
               nw.postMessage({ type:'SKIP_WAITING' });
           });
         });
-        await navigator.serviceWorker.ready;
         return swReg;
       } catch(e) { console.error('[App] SW error:', e.message); return null; }
     }
-    
     async function syncEventsToSW(events) {
       try {
         const reg = swReg || await navigator.serviceWorker.ready;
@@ -310,10 +335,10 @@
       return (
         <div className="fixed inset-0 z-50 bg-navy bg-grid flex flex-col items-center justify-center px-6 overflow-y-auto">
           <div className="w-full max-w-sm flex flex-col items-center gap-6 py-8">
-            <div className="w-full text-center">
-              <div className="text-gold text-5xl mb-3 text-center">✦</div>
-              <h1 className="font-cinzel text-gold-light tracking-widest uppercase text-base font-bold text-center">Oriente Fraterno · 148</h1>
-              <p className="font-cinzel text-gold/50 tracking-widest uppercase text-xs mt-1 text-center">Configuración de Notificaciones</p>
+            <div className="text-center">
+              <div className="text-gold text-5xl mb-3">✦</div>
+              <h1 className="font-cinzel text-gold-light tracking-widest uppercase text-base font-bold">Oriente Fraterno · 148</h1>
+              <p className="font-cinzel text-gold/50 tracking-widest uppercase text-xs mt-1">Configuración de Notificaciones</p>
             </div>
 
             <Card className="w-full p-5 space-y-5">
@@ -321,27 +346,20 @@
                 <div className="fade-in space-y-4">
                   {iosOld && (
                     <div className="bg-red-900/30 border border-red-500/40 rounded p-3">
-                      <p className="font-crimson text-red-300 text-sm">⚠️ Tu iOS ({iosVer}) no soporta notificaciones web. Actualiza a iOS 16.4+ para recibirlas.</p>
-                    </div>
-                  )}
-                  {ios && !iosOld && (
-                    <div className="bg-amber-900/30 border border-amber-600/40 rounded p-3">
-                      <p className="font-crimson text-amber-200 text-sm">📱 En iPhone/iPad debes instalar la app primero y luego activar notificaciones desde adentro.</p>
+                      <p className="font-crimson text-red-300 text-sm">⚠️ Tu iOS ({iosVer}) no soporta notificaciones web. Actualizá a iOS 16.4+.</p>
                     </div>
                   )}
                   <div className="flex gap-3 items-start">
                     <span className="bg-gold/20 text-gold w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold shrink-0 mt-0.5">1</span>
-                    <p className="font-crimson text-white/90 text-base leading-snug">
-                      {ios
-                        ? 'Abre esta página en Safari → toca Compartir (□↑) → "Agregar a pantalla de inicio".'
-                        : 'Instala la app: toca el menú del navegador y elige "Agregar a pantalla de inicio" o "Instalar aplicación".'}
-                    </p>
+                    <p className="font-crimson text-white/90 text-base leading-snug">Tocá <span className="text-gold font-semibold">"Activar Notificaciones Web"</span> y aceptá el permiso del navegador.</p>
                   </div>
                   <div className="h-px bg-gold/15" />
                   <div className="flex gap-3 items-start">
                     <span className="bg-gold/20 text-gold w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold shrink-0 mt-0.5">2</span>
                     <p className="font-crimson text-white/90 text-base leading-snug">
-                      Abre la app instalada y toca <span className="text-gold font-semibold">"Activar Notificaciones Web"</span>, acepta el permiso.
+                      {ios
+                        ? 'En iOS instalá la app primero: Compartir → Agregar al inicio.'
+                        : 'Instalá la app en tu pantalla de inicio para garantizar notificaciones en segundo plano.'}
                     </p>
                   </div>
                   <button onClick={() => setStep(2)} className="w-full py-3 mt-2 rounded font-cinzel text-xs tracking-widest uppercase bg-gold/10 border border-gold/30 text-gold font-bold">
@@ -351,32 +369,18 @@
               )}
               {step === 2 && (
                 <div className="fade-in space-y-4">
-                  <h3 className="font-cinzel text-gold text-xs tracking-widest uppercase text-center">
-                    {android ? 'Permitir ejecución en segundo plano' : 'Activar notificaciones en Ajustes'}
-                  </h3>
+                  <h3 className="font-cinzel text-gold text-xs tracking-widest uppercase text-center">Ajuste de Segundo Plano</h3>
                   {android ? (
-                    <div className="space-y-3">
-                      <p className="font-crimson text-white/70 text-sm">Para que las notificaciones lleguen con la app cerrada:</p>
-                      <ul className="space-y-2 text-sm font-crimson text-white/90">
-                        <li className="flex gap-2"><span className="text-gold">1.</span>Mantén presionado el ícono de la app instalada.</li>
-                        <li className="flex gap-2"><span className="text-gold">2.</span>Toca <span className="text-gold">Info de la app ⓘ</span>.</li>
-                        <li className="flex gap-2"><span className="text-gold">3.</span>Batería → elige <span className="text-gold">Sin restricciones</span>.</li>
-                        <li className="flex gap-2"><span className="text-gold">4.</span>En Samsung: también desactiva "Optimización de batería".</li>
-                      </ul>
-                    </div>
-                  ) : ios ? (
-                    <div className="space-y-3">
-                      <p className="font-crimson text-white/70 text-sm">Una vez instalada la app en pantalla de inicio:</p>
-                      <ul className="space-y-2 text-sm font-crimson text-white/90">
-                        <li className="flex gap-2"><span className="text-gold">1.</span>Ábrela desde el ícono (no desde Safari).</li>
-                        <li className="flex gap-2"><span className="text-gold">2.</span>Activa las notificaciones y acepta el permiso.</li>
-                        <li className="flex gap-2"><span className="text-gold">3.</span>Ajustes del iPhone → Notificaciones → <span className="text-gold">Oriente Fraterno</span> → Activa todas.</li>
-                      </ul>
-                    </div>
+                    <ul className="space-y-2 text-sm font-crimson text-white/90">
+                      <li className="flex gap-2"><span>•</span>Mantené presionado el ícono de la app.</li>
+                      <li className="flex gap-2"><span>•</span>Tocá <span className="text-gold">Info de la aplicación ⓘ</span>.</li>
+                      <li className="flex gap-2"><span>•</span>Batería → elegí <span className="text-gold">Sin Restricciones</span>.</li>
+                    </ul>
                   ) : (
                     <ul className="space-y-2 text-sm font-crimson text-white/90">
-                      <li className="flex gap-2"><span className="text-gold">•</span>Instala desde el navegador: menú → "Instalar aplicación".</li>
-                      <li className="flex gap-2"><span className="text-gold">•</span>Las notificaciones funcionan aunque el navegador esté cerrado.</li>
+                      <li className="flex gap-2"><span>•</span>Instalá desde Safari: <span className="text-gold">Compartir → Agregar al inicio</span>.</li>
+                      <li className="flex gap-2"><span>•</span>Ajustes → Notificaciones → <span className="text-gold">Oriente Fraterno</span>.</li>
+                      <li className="flex gap-2"><span>•</span>Activá todas las notificaciones.</li>
                     </ul>
                   )}
                   <div className="h-px bg-gold/15" />
@@ -407,7 +411,7 @@
       const [showWelcome, setShowWelcome] = useState(true);
       const toastRef                      = useRef(null);
 
-      // Registrar SW al montar
+      // Registrar SW al montar (no espera a que se cierre la bienvenida)
       useEffect(() => {
         (async () => {
           const reg = await registerSW();
@@ -446,9 +450,9 @@
       , [events]);
 
       async function handleSave() {
-        if (!nombre.trim()) { showToast('Ingresa el nombre'); return; }
-        if (!mes || !dia)   { showToast('Selecciona mes y día'); return; }
-        if (!tipo)          { showToast('Selecciona el tipo de evento'); return; }
+        if (!nombre.trim()) { showToast('Ingresá el nombre'); return; }
+        if (!mes || !dia)   { showToast('Seleccioná mes y día'); return; }
+        if (!tipo)          { showToast('Seleccioná el tipo de evento'); return; }
         const fecha = mes.padStart(2,'0') + '-' + dia.padStart(2,'0');
         await saveEventToFirebase({ id: Date.now(), nombre: nombre.trim(), fecha, tipo });
         setNombre(''); setMes(''); setDia(''); setTipo('');
@@ -470,14 +474,7 @@
           await syncEventsToSW(events);
           showToast('Notificaciones activadas ✦');
         } else {
-          const err = window._lastWebPushError || '';
-          if (!granted) {
-            showToast('Permiso denegado. Revisa los ajustes del navegador.');
-          } else if (err) {
-            showToast('Error: ' + err.slice(0, 60));
-          } else {
-            showToast('Error al registrar. Abre la consola (F12) e informa el error.');
-          }
+          showToast(granted ? 'Error al registrar. Intentá de nuevo.' : 'Permiso denegado. Revisá los ajustes del navegador.');
         }
       }
 
@@ -576,4 +573,24 @@
           </main>
 
           <footer className="text-center pb-8 pt-2">
-            <p className
+            <p className="font-cinzel text-gold/25 text-xs tracking-[0.2em] uppercase">✦ A L:. G:. A:. D:. U:. ✦</p>
+            <p className="font-cinzel text-gold/20 text-xs tracking-widest uppercase mt-2">Creación: H.'. C. E. A. D. 2026</p>
+          </footer>
+
+          <Toast message={toast.msg} visible={toast.visible} />
+        </div>
+      );
+    }
+
+    const rootEl = document.getElementById('root');
+    try {
+      ReactDOM.createRoot(rootEl).render(<App />);
+    } catch(e) {
+      rootEl.innerHTML = '<div style="color:white;text-align:center;padding:40px;font-family:serif">'
+        + '<p style="color:#c9a84c;font-size:2rem">✦</p>'
+        + '<p>Error: ' + e.message + '</p>'
+        + '<p style="font-size:0.8rem;opacity:0.5;margin-top:8px">Recargá con Ctrl+Shift+R</p></div>';
+    }
+  </script>
+</body>
+</html>
