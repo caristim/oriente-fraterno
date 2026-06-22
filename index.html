@@ -53,6 +53,20 @@
       db = firebase.firestore();
     } catch(e) { console.error('[App] Firebase init error:', e.message); }
 
+    if (typeof firebase !== 'undefined' && typeof firebase.messaging === 'function') {
+      try {
+        firebase.messaging().onMessage(payload => {
+          const data = payload.data || {};
+          if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+            new Notification(data.title || 'Oriente Fraterno 148', {
+              body: data.body || 'Tenés un evento hoy ✦',
+              icon: 'https://caristim.github.io/oriente-fraterno/icon-192.png',
+            });
+          }
+        });
+      } catch(e) { console.warn('[FCM] onMessage no disponible:', e.message); }
+    }
+
     function isIOS()     { return /iPhone|iPad|iPod/i.test(navigator.userAgent); }
     function isFirefox() { return /firefox/i.test(navigator.userAgent); }
     function isFCMCapable() {
