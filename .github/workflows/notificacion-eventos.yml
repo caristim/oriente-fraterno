@@ -164,26 +164,47 @@ jobs:
             });
           }
 
-          // ── Envío FCM: DATA-ONLY payload ────────────────────────────────────
+          // ── Envío FCM: notification + data (Android con app cerrada) ─────────
           function fcmSend(projectId, accessToken, token, titulo, cuerpo, tag) {
             return new Promise((resolve, reject) => {
+              const appUrl = 'https://caristim.github.io/oriente-fraterno/';
+              const icon   = appUrl + 'icon-192.png';
               const body = JSON.stringify({
                 message: {
                   token: token,
+                  notification: {
+                    title: titulo,
+                    body:  cuerpo,
+                  },
                   data: {
                     title: titulo,
                     body:  cuerpo,
-                    url:   'https://caristim.github.io/oriente-fraterno/',
+                    url:   appUrl,
                     tag:   tag,
                   },
                   android: {
                     priority: 'high',
                     ttl:      '86400s',
+                    notification: {
+                      channel_id: 'of-eventos',
+                      priority:   'HIGH',
+                    },
                   },
                   webpush: {
                     headers: {
                       Urgency: 'high',
                       TTL:     '86400',
+                    },
+                    notification: {
+                      title:              titulo,
+                      body:               cuerpo,
+                      icon:               icon,
+                      badge:              icon,
+                      tag:                tag,
+                      requireInteraction: true,
+                    },
+                    fcm_options: {
+                      link: appUrl,
                     },
                   },
                 },
@@ -329,7 +350,7 @@ jobs:
             console.log('  Tokens FCM registrados:', fcmDocs.length);
 
             // ── [3/4] Leer suscripciones Web Push ───────────────────────────
-            console.log('\n[3/4] Leyendo suscripciones Web Push (iOS/Firefox/Edge)...');
+            console.log('\n[3/4] Leyendo suscripciones Web Push (iOS/Firefox)...');
             const wpData = await firestoreGetAll(projectId, accessToken, 'webpush_subscriptions');
             const wpDocs = (wpData.error ? [] : (wpData.documents || [])).map(doc => {
               const f = doc.fields || {};
@@ -340,8 +361,9 @@ jobs:
                 platform: (f.platform && f.platform.stringValue) || 'unknown',
                 docName:  doc.name,
               };
-            }).filter(d => d.endpoint && d.p256dh && d.auth);
-            console.log('  Suscripciones Web Push:', wpDocs.length);
+            }).filter(d => d.endpoint && d.p256dh && d.auth)
+              .filter(d => d.platform !== 'chromium');
+            console.log('  Suscripciones Web Push (iOS/Firefox):', wpDocs.length);
 
             if (fcmDocs.length === 0 && wpDocs.length === 0) {
               console.log('\n⚠️  No hay dispositivos registrados.');
