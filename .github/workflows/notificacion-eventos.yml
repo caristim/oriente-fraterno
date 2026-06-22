@@ -22,7 +22,7 @@ jobs:
         env:
           FIREBASE_PROJECT_ID:      ${{ secrets.OF_FIREBASE_PROJECT_ID }}
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.OF_FIREBASE_SERVICE_ACCOUNT }}
-          FIREBASE_SERVER_KEY:      ${{ secrets.OF_FIREBASE_SERVER_KEY }}   # ⚠️ NUEVO
+          FIREBASE_SERVER_KEY:      ${{ secrets.OF_FIREBASE_SERVER_KEY }}
           VAPID_PUBLIC_KEY:         ${{ secrets.OF_VAPID_PUBLIC_KEY }}
           VAPID_PRIVATE_KEY:        ${{ secrets.OF_VAPID_PRIVATE_KEY }}
           VAPID_SUBJECT:            ${{ secrets.OF_VAPID_SUBJECT }}
@@ -37,7 +37,6 @@ jobs:
           const requiredEnvVars = [
             'FIREBASE_PROJECT_ID',
             'FIREBASE_SERVICE_ACCOUNT',
-            'FIREBASE_SERVER_KEY',
             'VAPID_PUBLIC_KEY',
             'VAPID_PRIVATE_KEY',
             'VAPID_SUBJECT',
@@ -57,11 +56,14 @@ jobs:
             process.env.VAPID_PRIVATE_KEY
           );
 
-          // ═══ NUEVO: Configurar GCM API Key para Chrome/Android ────────────
+          // GCM API Key (opcional): solo ayuda a web-push con endpoints Chrome legacy.
+          // Android/Chrome usa FCM HTTP v1 (OAuth2 + service account), no la necesita.
           const GCM_API_KEY = process.env.FIREBASE_SERVER_KEY;
           if (GCM_API_KEY) {
             webpush.setGCMAPIKey(GCM_API_KEY);
-            console.log('  GCM API Key configurada para web-push (Android/Chrome)');
+            console.log('  GCM API Key configurada (opcional)');
+          } else {
+            console.log('  GCM API Key no configurada (opcional, no requerida)');
           }
 
           // ── Helpers JWT para Google OAuth2 ──────────────────────────────────
