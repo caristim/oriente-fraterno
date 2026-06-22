@@ -1,19 +1,18 @@
-// Oriente Fraterno 148 — Service Worker v23.0
-// CORRECCIÓN DEFINITIVA:
-//   1. Firebase se reinicializa en cada evento push/mensaje si falló al inicio.
-//   2. onBackgroundMessage se registra dentro de initFirebase (reintento seguro).
-//   3. El payload de iOS se maneja como texto plano (requisito de Safari).
-//   4. Se usa badge para forzar el despertado en segundo plano en iOS.
+// Oriente Fraterno 148 — Service Worker v24.0
+// CORRECCIÓN v24 (app cerrada en Android/iOS):
+//   1. Un solo handler push que NUNCA descarta mensajes FCM.
+//   2. Sin depender del SDK Firebase en el SW (importScripts fallaba en móvil).
+//   3. FCM con notification payload: el browser lo muestra; el SW solo marca fired.
+//   4. Web Push nativo (iOS PWA / Firefox): parseo JSON + texto plano.
 
-const SW_VERSION    = 'of-sw-v23.0';
+const SW_VERSION    = 'of-sw-v24.0';
 const DB_NAME       = 'of_sw';
 const APP_ROOT      = 'https://caristim.github.io/oriente-fraterno/';
 const APP_URL       = 'https://caristim.github.io/oriente-fraterno/';
 const ICON_192      = 'https://caristim.github.io/oriente-fraterno/icon-192.png';
 const BADGE_URL     = 'https://caristim.github.io/oriente-fraterno/icon-192.png';
-const FCM_SENDER_ID = '101867774014';
 
-const CACHE_NAME    = 'of-cache-v23.0';
+const CACHE_NAME    = 'of-cache-v24.0';
 const PRECACHE_URLS = [
   APP_ROOT,
   APP_ROOT + 'index.html',
@@ -22,127 +21,83 @@ const PRECACHE_URLS = [
   APP_ROOT + 'icon-512.png',
 ];
 
-// ── Inicialización Firebase (con reintento) ─────────────────────────────
-let fcmMessaging         = null;
-let fcmInitialized       = false;
-let fcmHandlerRegistered = false;
-
-function registerFcmBackgroundHandler() {
-  if (fcmHandlerRegistered || !fcmMessaging) return;
-  fcmHandlerRegistered = true;
-  fcmMessaging.onBackgroundMessage(async payload => {
-    console.log('[SW-FCM] onBackgroundMessage:', JSON.stringify(payload));
-    const data   = payload.data || {};
-    const titulo = data.title || 'Oriente Fraterno 148';
-    const cuerpo = data.body  || 'Tenés un evento hoy ✦';
-    const url    = data.url   || APP_URL;
-    const evTag  = data.tag   || ('of-fcm-' + Date.now());
-
-    await self.registration.showNotification(titulo, {
-      body: cuerpo, icon: ICON_192, badge: BADGE_URL,
-      tag: evTag, requireInteraction: true,
-      vibrate: [200, 100, 200, 100, 200],
-      data: { url },
-    });
-    await markFiredToday();
-  });
-}
-
-function initFirebase() {
-  if (fcmInitialized && fcmMessaging) return;
+// ── Push: parseo unificado (FCM + Web Push nativo) ────────────────────────
+function readPushJson(e) {
+  if (!e.data) return null;
+  try { return e.data.json(); } catch (_) {}
   try {
-    if (typeof firebase === 'undefined') {
-      try {
-        importScripts('https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js');
-        importScripts('https://www.gstatic.com/firebasejs/10.8.0/firebase-messaging-compat.js');
-      } catch (e) {
-        console.warn('[SW] importScripts falló:', e.message);
-        return;
-      }
-    }
-    fcmInitialized = true;
-
-    const existingApps = firebase.apps || [];
-    if (existingApps.length === 0) {
-      firebase.initializeApp({
-        apiKey:            'AIzaSyD9gQW61AvKHhNai6gljNFE7q9rS7KKuN8',
-        authDomain:        'orientefraterno148-2a0c1.firebaseapp.com',
-        projectId:         'orientefraterno148-2a0c1',
-        storageBucket:     'orientefraterno148-2a0c1.firebasestorage.app',
-        messagingSenderId: FCM_SENDER_ID,
-        appId:             '1:101867774014:web:0b4bb797293910c419716f',
-      });
-    }
-    fcmMessaging = firebase.messaging();
-    registerFcmBackgroundHandler();
-    console.log('[SW] Firebase + FCM inicializado.');
-  } catch (err) {
-    console.warn('[SW] Firebase no disponible (normal en Firefox/Safari):', err.message);
-    fcmMessaging = null;
-  }
+    const text = e.data.text();
+    if (text) return JSON.parse(text);
+  } catch (_) {}
+  return null;
 }
 
-initFirebase();
+async function showPushNotification(titulo, cuerpo, url, evTag) {
+  await self.registration.showNotification(titulo, {
+    body: cuerpo,
+    icon: ICON_192,
+    badge: BADGE_URL,
+    tag: evTag,
+    requireInteraction: true,
+    vibrate: [200, 100, 200, 100, 200],
+    data: { url },
+  });
+  await markFiredToday();
+}
 
-self.addEventListener('push', () => { if (!fcmMessaging) initFirebase(); });
-self.addEventListener('message', () => { if (!fcmMessaging) initFirebase(); });
+async function handlePushEvent(e) {
+  const raw = readPushJson(e);
 
-// ── CANAL 2: WEB PUSH NATIVO (iOS Safari PWA, Firefox) ────────────────────
-self.addEventListener('push', e => {
-  console.log('[SW-Push] Evento push nativo recibido');
+  if (!raw) {
+    const text = e.data ? (() => { try { return e.data.text(); } catch (_) { return ''; } })() : '';
+    await showPushNotification(
+      'Oriente Fraterno 148',
+      text || 'Tenés un evento hoy ✦',
+      APP_URL,
+      'of-' + Date.now()
+    );
+    return;
+  }
 
-  // En iOS/Firefox no hay FCM; en Android/Chrome los mensajes FCM los maneja el SDK.
-  if (e.data) {
-    try {
-      const data = e.data.json();
-      if (data.from || data.fcmMessageId || (fcmMessaging && data.data)) {
-        console.log('[SW-Push] Mensaje FCM detectado, ignorando (manejado por SDK).');
-        return;
-      }
-    } catch (_) {}
+  const isFCM = !!(raw.from || raw.fcmMessageId);
+
+  // Android/Chrome: FCM con notification payload lo muestra el browser automáticamente
+  if (isFCM && raw.notification && (raw.notification.title || raw.notification.body)) {
+    console.log('[SW-Push] FCM notification payload — auto-display del browser');
+    await markFiredToday();
+    return;
   }
 
   let titulo = 'Oriente Fraterno 148';
   let cuerpo = 'Tenés un evento hoy ✦';
   let url    = APP_URL;
-  let evTag  = 'of-wp-' + Date.now();
+  let evTag  = 'of-' + Date.now();
 
-  if (e.data) {
-    try {
-      const data = e.data.json();
-      titulo = data.title || titulo;
-      cuerpo = data.body  || cuerpo;
-      url    = data.url   || url;
-      evTag  = data.tag   || evTag;
-    } catch (_) {
-      // Si no es JSON, usar el texto plano como cuerpo (necesario para iOS)
-      const texto = e.data.text();
-      if (texto) cuerpo = texto;
-    }
+  if (isFCM && raw.data && typeof raw.data === 'object') {
+    const d = raw.data;
+    titulo = d.title || titulo;
+    cuerpo = d.body  || cuerpo;
+    url    = d.url   || url;
+    evTag  = d.tag   || evTag;
+  } else {
+    titulo = raw.title || titulo;
+    cuerpo = raw.body  || cuerpo;
+    url    = raw.url   || url;
+    evTag  = raw.tag   || evTag;
   }
 
-  e.waitUntil(
-    (async () => {
-      try {
-        // ⚠️ iOS necesita badge o sound para "despertar" en segundo plano.
-        await self.registration.showNotification(titulo, {
-          body: cuerpo,
-          icon: ICON_192,
-          badge: BADGE_URL,  // <-- CRÍTICO para iOS 16.4+
-          tag: evTag,
-          requireInteraction: true,
-          vibrate: [200, 100, 200, 100, 200],
-          data: { url },
-        });
-        await markFiredToday();
-      } catch (err) {
-        console.error('[SW-Push] Error mostrando notificación:', err.message);
-      }
-    })()
-  );
+  console.log('[SW-Push] Mostrando notificación:', titulo, '|', cuerpo);
+  await showPushNotification(titulo, cuerpo, url, evTag);
+}
+
+self.addEventListener('push', e => {
+  console.log('[SW-Push] Evento push recibido (app puede estar cerrada)');
+  e.waitUntil(handlePushEvent(e).catch(err => {
+    console.error('[SW-Push] Error fatal:', err.message);
+  }));
 });
 
-// ── CANAL 3: VERIFICACIÓN LOCAL (respaldo con app abierta) ────────────────
+// ── CANAL LOCAL: respaldo con app abierta ─────────────────────────────────
 async function checkAndNotify() {
   try {
     const events = await dbGet('events');
