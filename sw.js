@@ -1,10 +1,11 @@
-// Oriente Fraterno 148 — Service Worker v22.0
+// Oriente Fraterno 148 — Service Worker v23.0
 // CORRECCIÓN DEFINITIVA:
 //   1. Firebase se reinicializa en cada evento push/mensaje si falló al inicio.
-//   2. El payload de iOS se maneja como texto plano (requisito de Safari).
-//   3. Se usa badge para forzar el despertado en segundo plano en iOS.
+//   2. onBackgroundMessage se registra dentro de initFirebase (reintento seguro).
+//   3. El payload de iOS se maneja como texto plano (requisito de Safari).
+//   4. Se usa badge para forzar el despertado en segundo plano en iOS.
 
-const SW_VERSION    = 'of-sw-v22.0';
+const SW_VERSION    = 'of-sw-v23.0';
 const DB_NAME       = 'of_sw';
 const APP_ROOT      = 'https://caristim.github.io/oriente-fraterno/';
 const APP_URL       = 'https://caristim.github.io/oriente-fraterno/';
@@ -12,7 +13,7 @@ const ICON_192      = 'https://caristim.github.io/oriente-fraterno/icon-192.png'
 const BADGE_URL     = 'https://caristim.github.io/oriente-fraterno/icon-192.png';
 const FCM_SENDER_ID = '101867774014';
 
-const CACHE_NAME    = 'of-cache-v22.0';
+const CACHE_NAME    = 'of-cache-v23.0';
 const PRECACHE_URLS = [
   APP_ROOT,
   APP_ROOT + 'index.html',
@@ -22,58 +23,13 @@ const PRECACHE_URLS = [
 ];
 
 // ── Inicialización Firebase (con reintento) ─────────────────────────────
-let fcmMessaging   = null;
-let fcmInitialized = false;
+let fcmMessaging         = null;
+let fcmInitialized       = false;
+let fcmHandlerRegistered = false;
 
-function initFirebase() {
-  if (fcmInitialized) return;
-  try {
-    // Si los scripts ya están cargados globalmente, los usamos.
-    // Si no, intentamos importarlos (puede fallar en Firefox/Safari).
-    if (typeof firebase === 'undefined') {
-      try {
-        importScripts('https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js');
-        importScripts('https://www.gstatic.com/firebasejs/10.8.0/firebase-messaging-compat.js');
-        fcmInitialized = true;
-      } catch (e) {
-        console.warn('[SW] importScripts falló:', e.message);
-        // No marcamos fcmInitialized = true, así lo reintentamos después.
-        return;
-      }
-    } else {
-      fcmInitialized = true;
-    }
-
-    if (!fcmInitialized) return;
-
-    const existingApps = firebase.apps || [];
-    if (existingApps.length === 0) {
-      firebase.initializeApp({
-        apiKey:            'AIzaSyD9gQW61AvKHhNai6gljNFE7q9rS7KKuN8',
-        authDomain:        'orientefraterno148-2a0c1.firebaseapp.com',
-        projectId:         'orientefraterno148-2a0c1',
-        storageBucket:     'orientefraterno148-2a0c1.firebasestorage.app',
-        messagingSenderId: FCM_SENDER_ID,
-        appId:             '1:101867774014:web:0b4bb797293910c419716f',
-      });
-    }
-    fcmMessaging = firebase.messaging();
-    console.log('[SW] Firebase + FCM inicializado.');
-  } catch (err) {
-    console.warn('[SW] Firebase no disponible (normal en Firefox/Safari):', err.message);
-    fcmMessaging = null;
-  }
-}
-
-// Llamar al inicio
-initFirebase();
-
-// Reintentar en cada evento push o mensaje (por si falló la primera vez)
-self.addEventListener('push', () => { if (!fcmMessaging) initFirebase(); });
-self.addEventListener('message', () => { if (!fcmMessaging) initFirebase(); });
-
-// ── CANAL 1: FCM BACKGROUND (Chrome/Edge/Android) ────────────────────────
-if (fcmMessaging) {
+function registerFcmBackgroundHandler() {
+  if (fcmHandlerRegistered || !fcmMessaging) return;
+  fcmHandlerRegistered = true;
   fcmMessaging.onBackgroundMessage(async payload => {
     console.log('[SW-FCM] onBackgroundMessage:', JSON.stringify(payload));
     const data   = payload.data || {};
@@ -92,17 +48,55 @@ if (fcmMessaging) {
   });
 }
 
+function initFirebase() {
+  if (fcmInitialized && fcmMessaging) return;
+  try {
+    if (typeof firebase === 'undefined') {
+      try {
+        importScripts('https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js');
+        importScripts('https://www.gstatic.com/firebasejs/10.8.0/firebase-messaging-compat.js');
+      } catch (e) {
+        console.warn('[SW] importScripts falló:', e.message);
+        return;
+      }
+    }
+    fcmInitialized = true;
+
+    const existingApps = firebase.apps || [];
+    if (existingApps.length === 0) {
+      firebase.initializeApp({
+        apiKey:            'AIzaSyD9gQW61AvKHhNai6gljNFE7q9rS7KKuN8',
+        authDomain:        'orientefraterno148-2a0c1.firebaseapp.com',
+        projectId:         'orientefraterno148-2a0c1',
+        storageBucket:     'orientefraterno148-2a0c1.firebasestorage.app',
+        messagingSenderId: FCM_SENDER_ID,
+        appId:             '1:101867774014:web:0b4bb797293910c419716f',
+      });
+    }
+    fcmMessaging = firebase.messaging();
+    registerFcmBackgroundHandler();
+    console.log('[SW] Firebase + FCM inicializado.');
+  } catch (err) {
+    console.warn('[SW] Firebase no disponible (normal en Firefox/Safari):', err.message);
+    fcmMessaging = null;
+  }
+}
+
+initFirebase();
+
+self.addEventListener('push', () => { if (!fcmMessaging) initFirebase(); });
+self.addEventListener('message', () => { if (!fcmMessaging) initFirebase(); });
+
 // ── CANAL 2: WEB PUSH NATIVO (iOS Safari PWA, Firefox) ────────────────────
 self.addEventListener('push', e => {
   console.log('[SW-Push] Evento push nativo recibido');
 
-  // Si FCM ya lo manejó, no hacemos nada (evita duplicados).
-  // En iOS/Firefox, FCM no existe, así que siempre entra aquí.
-  if (fcmMessaging && e.data) {
+  // En iOS/Firefox no hay FCM; en Android/Chrome los mensajes FCM los maneja el SDK.
+  if (e.data) {
     try {
       const data = e.data.json();
-      if (String(data.from) === FCM_SENDER_ID) {
-        console.log('[SW-Push] Mensaje FCM detectado, ignorando (ya manejado por SDK).');
+      if (data.from || data.fcmMessageId || (fcmMessaging && data.data)) {
+        console.log('[SW-Push] Mensaje FCM detectado, ignorando (manejado por SDK).');
         return;
       }
     } catch (_) {}
@@ -115,7 +109,6 @@ self.addEventListener('push', e => {
 
   if (e.data) {
     try {
-      // Intentar parsear como JSON
       const data = e.data.json();
       titulo = data.title || titulo;
       cuerpo = data.body  || cuerpo;

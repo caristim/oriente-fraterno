@@ -113,6 +113,19 @@
       } catch(e) { console.error('[FCM] Error:', e.message); return false; }
     }
 
+    async function limpiarWebPushDuplicado(reg) {
+      if (!isFCMCapable() || !db) return;
+      try {
+        const sub = await reg.pushManager.getSubscription();
+        if (!sub) return;
+        const j = sub.toJSON();
+        if (j.endpoint) {
+          try { await db.collection('webpush_subscriptions').doc(hashEndpoint(j.endpoint)).delete(); } catch(_) {}
+        }
+        await sub.unsubscribe();
+      } catch(_) {}
+    }
+
     async function renovarRegistros(reg) {
       if (!db) return;
       if (isFCMCapable()) {
@@ -132,6 +145,7 @@
             localStorage.setItem('fcm_token', token);
           }
         } catch(e) { console.warn('[FCM] Renovación falló:', e.message); }
+        return;
       }
       if ('PushManager' in window) {
         try {
@@ -139,7 +153,7 @@
           if (sub) {
             const j = sub.toJSON();
             if (j.endpoint && j.keys && j.keys.p256dh && j.keys.auth) {
-              const platform = isIOS() ? 'ios' : isFirefox() ? 'firefox' : 'chromium';
+              const platform = isIOS() ? 'ios' : 'firefox';
               await db.collection('webpush_subscriptions').doc(hashEndpoint(j.endpoint)).set({
                 endpoint: j.endpoint, p256dh: j.keys.p256dh, auth: j.keys.auth,
                 platform, updatedAt: new Date().toISOString(),
@@ -158,7 +172,7 @@
       }
       if (isIOS() || isFirefox()) return registrarWebPush(reg);
       const ok = await registrarFCM(reg);
-      if (ok) registrarWebPush(reg).catch(()=>{});
+      if (ok) await limpiarWebPushDuplicado(reg);
       else return registrarWebPush(reg);
       return ok;
     }
