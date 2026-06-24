@@ -1,18 +1,14 @@
-// Oriente Fraterno 148 — Service Worker v24.0
-// CORRECCIÓN v24 (app cerrada en Android/iOS):
-//   1. Un solo handler push que NUNCA descarta mensajes FCM.
-//   2. Sin depender del SDK Firebase en el SW (importScripts fallaba en móvil).
-//   3. FCM con notification payload: el browser lo muestra; el SW solo marca fired.
-//   4. Web Push nativo (iOS PWA / Firefox): parseo JSON + texto plano.
+// Oriente Fraterno 148 — Service Worker v24.1
+// CORRECCIÓN: siempre muestra manualmente la notificación, incluso con payload FCM.
 
-const SW_VERSION    = 'of-sw-v24.0';
+const SW_VERSION    = 'of-sw-v24.1';
 const DB_NAME       = 'of_sw';
 const APP_ROOT      = 'https://caristim.github.io/oriente-fraterno/';
 const APP_URL       = 'https://caristim.github.io/oriente-fraterno/';
 const ICON_192      = 'https://caristim.github.io/oriente-fraterno/icon-192.png';
 const BADGE_URL     = 'https://caristim.github.io/oriente-fraterno/icon-192.png';
 
-const CACHE_NAME    = 'of-cache-v24.0';
+const CACHE_NAME    = 'of-cache-v24.1';
 const PRECACHE_URLS = [
   APP_ROOT,
   APP_ROOT + 'index.html',
@@ -59,26 +55,23 @@ async function handlePushEvent(e) {
     return;
   }
 
-  const isFCM = !!(raw.from || raw.fcmMessageId);
-
-  // Android/Chrome: FCM con notification payload lo muestra el browser automáticamente
-  if (isFCM && raw.notification && (raw.notification.title || raw.notification.body)) {
-    console.log('[SW-Push] FCM notification payload — auto-display del browser');
-    await markFiredToday();
-    return;
-  }
-
+  // Siempre mostramos manualmente, sin importar si es FCM o nativo
   let titulo = 'Oriente Fraterno 148';
   let cuerpo = 'Tenés un evento hoy ✦';
   let url    = APP_URL;
   let evTag  = 'of-' + Date.now();
 
-  if (isFCM && raw.data && typeof raw.data === 'object') {
-    const d = raw.data;
-    titulo = d.title || titulo;
-    cuerpo = d.body  || cuerpo;
-    url    = d.url   || url;
-    evTag  = d.tag   || evTag;
+  // Extraer de notificación o data
+  if (raw.notification) {
+    titulo = raw.notification.title || titulo;
+    cuerpo = raw.notification.body  || cuerpo;
+    if (raw.data && raw.data.url) url = raw.data.url;
+    if (raw.data && raw.data.tag) evTag = raw.data.tag;
+  } else if (raw.data) {
+    titulo = raw.data.title || titulo;
+    cuerpo = raw.data.body  || cuerpo;
+    url    = raw.data.url   || url;
+    evTag  = raw.data.tag   || evTag;
   } else {
     titulo = raw.title || titulo;
     cuerpo = raw.body  || cuerpo;
@@ -86,7 +79,7 @@ async function handlePushEvent(e) {
     evTag  = raw.tag   || evTag;
   }
 
-  console.log('[SW-Push] Mostrando notificación:', titulo, '|', cuerpo);
+  console.log('[SW-Push] Mostrando notificación manual:', titulo, '|', cuerpo);
   await showPushNotification(titulo, cuerpo, url, evTag);
 }
 
