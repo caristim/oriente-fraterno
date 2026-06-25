@@ -59,7 +59,7 @@
           const data = payload.data || {};
           if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
             new Notification(data.title || 'Oriente Fraterno 148', {
-              body: data.body || 'Tenés un evento hoy ✦',
+              body: data.body || 'Tienes un evento hoy ✦',
               icon: 'https://caristim.github.io/oriente-fraterno/icon-192.png',
             });
           }
@@ -364,7 +364,7 @@
           <div className="w-full max-w-sm flex flex-col items-center gap-6 py-8">
             <div className="text-center">
               <div className="text-gold text-5xl mb-3">✦</div>
-              <h1 className="font-cinzel text-gold-light tracking-widest uppercase text-base font-bold">Oriente Fraterno · 148</h1>
+              <h1 className="font-cinzel text-gold-light tracking-widest uppercase text-base font-bold text-center">Oriente Fraterno · 148</h1>
               <p className="font-cinzel text-gold/50 tracking-widest uppercase text-xs mt-1">Configuración de Notificaciones</p>
             </div>
 
@@ -378,7 +378,7 @@
                   )}
                   <div className="flex gap-3 items-start">
                     <span className="bg-gold/20 text-gold w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold shrink-0 mt-0.5">1</span>
-                    <p className="font-crimson text-white/90 text-base leading-snug">Toca <span className="text-gold font-semibold">"Activar Notificaciones Web"</span> y aceptá el permiso del navegador.</p>
+                    <p className="font-crimson text-white/90 text-base leading-snug">Toca <span className="text-gold font-semibold">"Activar Notificaciones Web"</span> y acepta el permiso del navegador.</p>
                   </div>
                   <div className="h-px bg-gold/15" />
                   <div className="flex gap-3 items-start">
@@ -401,7 +401,7 @@
                     <ul className="space-y-2 text-sm font-crimson text-white/90">
                       <li className="flex gap-2"><span>•</span>Mantén presionado el ícono de la app.</li>
                       <li className="flex gap-2"><span>•</span>Toca <span className="text-gold">Info de la aplicación ⓘ</span>.</li>
-                      <li className="flex gap-2"><span>•</span>Batería → elegí <span className="text-gold">Sin Restricciones</span>.</li>
+                      <li className="flex gap-2"><span>•</span>Batería → elige <span className="text-gold">Sin Restricciones</span>.</li>
                     </ul>
                   ) : (
                     <ul className="space-y-2 text-sm font-crimson text-white/90">
@@ -497,9 +497,9 @@
       , [events]);
 
       async function handleSave() {
-        if (!nombre.trim()) { showToast('Ingresá el nombre'); return; }
-        if (!mes || !dia)   { showToast('Seleccioná mes y día'); return; }
-        if (!tipo)          { showToast('Seleccioná el tipo de evento'); return; }
+        if (!nombre.trim()) { showToast('Ingresa el nombre'); return; }
+        if (!mes || !dia)   { showToast('Selecciona mes y día'); return; }
+        if (!tipo)          { showToast('Selecciona el tipo de evento'); return; }
         const fecha = mes.padStart(2,'0') + '-' + dia.padStart(2,'0');
         await saveEventToFirebase({ id: Date.now(), nombre: nombre.trim(), fecha, tipo });
         setNombre(''); setMes(''); setDia(''); setTipo('');
@@ -621,7 +621,7 @@
 
           <footer className="text-center pb-8 pt-2">
             <p className="font-cinzel text-gold/30 text-xs tracking-[0.2em] uppercase">✦ A L:. G:. A:. D:. U:. ✦</p>
-            <p className="font-cinzel text-gold/30 text-xs tracking-widest uppercase mt-2">Creación: H.'. C. E. A. D. 2026</p>
+            <p className="font-cinzel text-gold/70 text-xs tracking-widest uppercase mt-2" style={{textShadow:'0 0 8px rgba(201,168,76,0.4)'}}>creación · H:. C. E. A. D. 2026</p>
           </footer>
 
           <Toast message={toast.msg} visible={toast.visible} />
@@ -636,7 +636,7 @@
       rootEl.innerHTML = '<div style="color:white;text-align:center;padding:40px;font-family:serif">'
         + '<p style="color:#c9a84c;font-size:2rem">✦</p>'
         + '<p>Error: ' + e.message + '</p>'
-        + '<p style="font-size:0.8rem;opacity:0.5;margin-top:8px">Recargá con Ctrl+Shift+R</p></div>';
+        + '<p style="font-size:0.8rem;opacity:0.5;margin-top:8px">Recarga con Ctrl+Shift+R</p></div>';
     }
   </script>
 </body>
