@@ -362,10 +362,10 @@
       return (
         <div className="fixed inset-0 z-50 bg-navy bg-grid flex flex-col items-center justify-center px-6 overflow-y-auto">
           <div className="w-full max-w-sm flex flex-col items-center gap-6 py-8">
-            <div className="text-center">
+            <div className="text-center w-full">
               <div className="text-gold text-5xl mb-3">✦</div>
-              <h1 className="font-cinzel text-gold-light tracking-widest uppercase text-base font-bold">Oriente Fraterno · 148</h1>
-              <p className="font-cinzel text-gold/50 tracking-widest uppercase text-xs mt-1">Configuración de Notificaciones</p>
+              <h1 className="font-cinzel text-gold-light tracking-widest uppercase text-xl font-bold text-center w-full">Oriente Fraterno · 148</h1>
+              <p className="font-cinzel text-gold/50 tracking-widest uppercase text-xs mt-1 text-center">Configuración de Notificaciones</p>
             </div>
 
             <Card className="w-full p-5 space-y-5">
@@ -373,20 +373,20 @@
                 <div className="fade-in space-y-4">
                   {iosOld && (
                     <div className="bg-red-900/30 border border-red-500/40 rounded p-3">
-                      <p className="font-crimson text-red-300 text-sm">⚠️ Tu iOS ({iosVer}) no soporta notificaciones web. Actualizá a iOS 16.4+.</p>
+                      <p className="font-crimson text-red-300 text-sm">⚠️ Tu iOS ({iosVer}) no soporta notificaciones web. Actualiza a iOS 16.4+.</p>
                     </div>
                   )}
                   <div className="flex gap-3 items-start">
                     <span className="bg-gold/20 text-gold w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold shrink-0 mt-0.5">1</span>
-                    <p className="font-crimson text-white/90 text-base leading-snug">Tocá <span className="text-gold font-semibold">"Activar Notificaciones Web"</span> y aceptá el permiso del navegador.</p>
+                    <p className="font-crimson text-white/90 text-base leading-snug">Toca <span className="text-gold font-semibold">"Activar Notificaciones Web"</span> y acepta el permiso del navegador.</p>
                   </div>
                   <div className="h-px bg-gold/15" />
                   <div className="flex gap-3 items-start">
                     <span className="bg-gold/20 text-gold w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold shrink-0 mt-0.5">2</span>
                     <p className="font-crimson text-white/90 text-base leading-snug">
                       {ios
-                        ? 'En iOS instalá la app primero: Compartir → Agregar al inicio.'
-                        : 'Instalá la app en tu pantalla de inicio para garantizar notificaciones en segundo plano.'}
+                        ? 'En iOS instala la app primero: Compartir → Agregar al inicio.'
+                        : 'Instala la app en tu pantalla de inicio para garantizar notificaciones en segundo plano.'}
                     </p>
                   </div>
                   <button onClick={() => setStep(2)} className="w-full py-3 mt-2 rounded font-cinzel text-xs tracking-widest uppercase bg-gold/10 border border-gold/30 text-gold font-bold">
@@ -399,15 +399,15 @@
                   <h3 className="font-cinzel text-gold text-xs tracking-widest uppercase text-center">Ajuste de Segundo Plano</h3>
                   {android ? (
                     <ul className="space-y-2 text-sm font-crimson text-white/90">
-                      <li className="flex gap-2"><span>•</span>Mantené presionado el ícono de la app.</li>
-                      <li className="flex gap-2"><span>•</span>Tocá <span className="text-gold">Info de la aplicación ⓘ</span>.</li>
-                      <li className="flex gap-2"><span>•</span>Batería → elegí <span className="text-gold">Sin Restricciones</span>.</li>
+                      <li className="flex gap-2"><span>•</span>Mantén presionado el ícono de la app.</li>
+                      <li className="flex gap-2"><span>•</span>Toca <span className="text-gold">Info de la aplicación ⓘ</span>.</li>
+                      <li className="flex gap-2"><span>•</span>Batería → elige <span className="text-gold">Sin Restricciones</span>.</li>
                     </ul>
                   ) : (
                     <ul className="space-y-2 text-sm font-crimson text-white/90">
-                      <li className="flex gap-2"><span>•</span>Instalá desde Safari: <span className="text-gold">Compartir → Agregar al inicio</span>.</li>
+                      <li className="flex gap-2"><span>•</span>Instala desde Safari: <span className="text-gold">Compartir → Agregar al inicio</span>.</li>
                       <li className="flex gap-2"><span>•</span>Ajustes → Notificaciones → <span className="text-gold">Oriente Fraterno</span>.</li>
-                      <li className="flex gap-2"><span>•</span>Activá todas las notificaciones.</li>
+                      <li className="flex gap-2"><span>•</span>Activa todas las notificaciones.</li>
                     </ul>
                   )}
                   <div className="h-px bg-gold/15" />
@@ -438,18 +438,24 @@
       const [showWelcome, setShowWelcome] = useState(true);
       const toastRef                      = useRef(null);
 
-      // Registrar SW al montar (no espera a que se cierre la bienvenida)
+      // Registrar SW al montar
       useEffect(() => {
         (async () => {
           const reg = await registerSW();
           if (!reg) return;
+          // Renovar al iniciar
           if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
             window._renovarRegistros(reg).catch(() => {});
           }
+          // Renovar cada 24h para mantener tokens vivos
+          const interval = setInterval(() => {
+            window._renovarRegistros(reg).catch(() => {});
+          }, 24 * 60 * 60 * 1000);
+          return () => clearInterval(interval);
         })();
       }, []);
 
-      // ✅ NUEVO: Renovar suscripciones automáticamente al volver a primer plano
+      // Renovar al volver a primer plano
       useEffect(() => {
         const handleVisibilityChange = () => {
           if (document.visibilityState === 'visible' && swReg) {
@@ -457,7 +463,6 @@
           }
         };
         document.addEventListener('visibilitychange', handleVisibilityChange);
-        // También al montar, si ya hay SW
         if (swReg) {
           window._renovarRegistros(swReg).catch(() => {});
         }
@@ -492,9 +497,9 @@
       , [events]);
 
       async function handleSave() {
-        if (!nombre.trim()) { showToast('Ingresá el nombre'); return; }
-        if (!mes || !dia)   { showToast('Seleccioná mes y día'); return; }
-        if (!tipo)          { showToast('Seleccioná el tipo de evento'); return; }
+        if (!nombre.trim()) { showToast('Ingresa el nombre'); return; }
+        if (!mes || !dia)   { showToast('Selecciona mes y día'); return; }
+        if (!tipo)          { showToast('Selecciona el tipo de evento'); return; }
         const fecha = mes.padStart(2,'0') + '-' + dia.padStart(2,'0');
         await saveEventToFirebase({ id: Date.now(), nombre: nombre.trim(), fecha, tipo });
         setNombre(''); setMes(''); setDia(''); setTipo('');
@@ -516,7 +521,7 @@
           await syncEventsToSW(events);
           showToast('Notificaciones activadas ✦');
         } else {
-          showToast(granted ? 'Error al registrar. Intentá de nuevo.' : 'Permiso denegado. Revisá los ajustes del navegador.');
+          showToast(granted ? 'Error al registrar. Intenta de nuevo.' : 'Permiso denegado. Revisa los ajustes del navegador.');
         }
       }
 
@@ -535,8 +540,8 @@
         <div className="min-h-screen bg-navy bg-grid">
           <header className="sticky top-0 z-40 bg-navy/95 backdrop-blur border-b gold-border">
             <div className="max-w-lg mx-auto px-4 py-3">
-              <h1 className="font-cinzel text-gold-light tracking-widest uppercase text-sm font-bold">Registro de Eventos</h1>
-              <p className="font-cinzel text-gold/50 tracking-[0.2em] uppercase text-xs mt-0.5">Oriente Fraterno · 148</p>
+              <h1 className="font-cinzel text-gold-light tracking-widest uppercase text-sm font-bold text-center">Registro de Eventos</h1>
+              <p className="font-cinzel text-gold/50 tracking-[0.2em] uppercase text-xs mt-0.5 text-center">Oriente Fraterno · 148</p>
             </div>
           </header>
 
@@ -615,8 +620,8 @@
           </main>
 
           <footer className="text-center pb-8 pt-2">
-            <p className="font-cinzel text-gold/25 text-xs tracking-[0.2em] uppercase">✦ A L:. G:. A:. D:. U:. ✦</p>
-            <p className="font-cinzel text-gold/20 text-xs tracking-widest uppercase mt-2">Creación: H.'. C. E. A. D. 2026</p>
+            <p className="font-cinzel text-gold/60 text-sm tracking-[0.2em] uppercase">✦ A L:. G:. A:. D:. U:. ✦</p>
+            <p className="font-cinzel text-gold/60 text-xs tracking-widest uppercase mt-2">Creación: H.'. C. E. A. D. 2026</p>
           </footer>
 
           <Toast message={toast.msg} visible={toast.visible} />
@@ -631,7 +636,7 @@
       rootEl.innerHTML = '<div style="color:white;text-align:center;padding:40px;font-family:serif">'
         + '<p style="color:#c9a84c;font-size:2rem">✦</p>'
         + '<p>Error: ' + e.message + '</p>'
-        + '<p style="font-size:0.8rem;opacity:0.5;margin-top:8px">Recargá con Ctrl+Shift+R</p></div>';
+        + '<p style="font-size:0.8rem;opacity:0.5;margin-top:8px">Recarga con Ctrl+Shift+R</p></div>';
     }
   </script>
 </body>
