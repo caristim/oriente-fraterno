@@ -67,7 +67,7 @@ jobs:
           console.log('Subject:', process.env.VAPID_SUBJECT);
           console.log('Public key (primeros 20):', process.env.VAPID_PUBLIC_KEY.substring(0, 20) + '...');
 
-          // ── Helpers JWT ──────────────────────────────────────────────────────
+          // ── Helpers JWT y Firestore REST ────────────────────────────────────
           function base64url(str) {
             return Buffer.from(str).toString('base64')
               .replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
@@ -113,12 +113,11 @@ jobs:
             });
           }
 
-          // ── Firestore REST helpers ───────────────────────────────────────────
-          function firestoreGetPage(projectId, accessToken, collection, pageToken) {
+          async function firestoreGetPage(projectId, accessToken, collection, pageToken) {
             return new Promise((resolve, reject) => {
               let path = '/v1/projects/' + projectId + '/databases/(default)/documents/' + collection + '?pageSize=300';
               if (pageToken) path += '&pageToken=' + encodeURIComponent(pageToken);
-              const req = https.get({
+              https.get({
                 hostname: 'firestore.googleapis.com',
                 path,
                 headers: { 'Authorization': 'Bearer ' + accessToken },
@@ -129,8 +128,7 @@ jobs:
                   try { resolve(JSON.parse(d)); }
                   catch(e) { reject(new Error('JSON parse error: ' + d.substring(0, 200))); }
                 });
-              });
-              req.on('error', reject);
+              }).on('error', reject);
             });
           }
 
@@ -139,10 +137,9 @@ jobs:
             let pageToken = null;
             do {
               const data = await firestoreGetPage(projectId, accessToken, collection, pageToken);
-              // Si la respuesta no contiene documents, asumimos que la colección no existe o está vacía
-              if (!data || !data.documents) {
-                // Devolvemos un objeto con documents vacío y sin error
-                return { documents: [] };
+              if (data.error) {
+                console.error(`  Error en colección '${collection}':`, JSON.stringify(data.error));
+                return { documents: [], error: data.error };
               }
               docs      = docs.concat(data.documents || []);
               pageToken = data.nextPageToken || null;
@@ -150,7 +147,7 @@ jobs:
             return { documents: docs };
           }
 
-          function firestoreDelete(accessToken, docName) {
+          async function firestoreDelete(accessToken, docName) {
             return new Promise(resolve => {
               const req = https.request({
                 hostname: 'firestore.googleapis.com',
@@ -169,7 +166,7 @@ jobs:
             });
           }
 
-          // ── Envío FCM ─────────────────────────────────────────────────────────
+          // ── Envío FCM mejorado ─────────────────────────────────────────────
           async function fcmSend(projectId, accessToken, token, titulo, cuerpo, tag) {
             const appUrl = 'https://caristim.github.io/oriente-fraterno/';
             const icon   = appUrl + 'icon-192.png';
@@ -251,7 +248,7 @@ jobs:
             });
           }
 
-          // ── Web Push nativo ──────────────────────────────────────────────────
+          // ── Web Push nativo ─────────────────────────────────────────────────
           async function webPushSend(subscription, titulo, cuerpo, tag) {
             try {
               const payload = JSON.stringify({
@@ -314,7 +311,6 @@ jobs:
               process.exit(1);
             }
 
-            // Verificar que la respuesta tenga la propiedad 'documents'
             if (!eventosData || !eventosData.documents) {
               console.log('  No se encontró la colección "eventos" o está vacía.');
               console.log('  Asegúrate de crear al menos un evento desde la app.');
@@ -322,14 +318,12 @@ jobs:
               process.exit(0);
             }
 
-            // Si la colección existe pero no hay documentos, también salimos
-            if (eventosData.documents.length === 0) {
-              console.log('  La colección "eventos" existe pero no contiene documentos.');
-              console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
-              process.exit(0);
+            if (eventosData.error) {
+              console.error('❌ Error crítico leyendo eventos:', JSON.stringify(eventosData.error));
+              process.exit(1);
             }
 
-            const todosLosEventos = eventosData.documents.map(doc => {
+            const todosLosEventos = (eventosData.documents || []).map(doc => {
               const f = doc.fields || {};
               return {
                 nombre: (f.nombre?.stringValue) || '',
@@ -343,7 +337,7 @@ jobs:
 
             if (eventos.length === 0) {
               console.log(`\nHoy (${fechaHoy}) no hay eventos. No se envían notificaciones.`);
-              // Mostrar próximos eventos en 7 días
+              // Mostrar próximos eventos (opcional)
               console.log('\nPróximos eventos en 7 días:');
               const hoy = new Date();
               for (let i = 1; i <= 7; i++) {
@@ -352,9 +346,7 @@ jobs:
                 const dd = String(d.getDate()).padStart(2,'0');
                 const f = dm + '-' + dd;
                 const evs = todosLosEventos.filter(e => e.fecha === f);
-                if (evs.length) {
-                  console.log(`  En ${i} día(s) (${f}): ${evs.map(e => e.nombre).join(', ')}`);
-                }
+                if (evs.length) console.log(`  ${i} día(s) (${f}): ${evs.map(e=>e.nombre).join(', ')}`);
               }
               console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
               return;
@@ -365,7 +357,7 @@ jobs:
             // [2] Leer tokens FCM
             console.log('\n[2/4] Leyendo tokens FCM (Chrome/Edge/Android)...');
             const fcmData = await firestoreGetAll(projectId, accessToken, 'fcm_tokens');
-            const fcmDocs = (fcmData.documents || []).map(doc => ({
+            const fcmDocs = (fcmData.error ? [] : (fcmData.documents || [])).map(doc => ({
               token:   (doc.fields?.token?.stringValue) || '',
               docName: doc.name,
             })).filter(d => d.token.length > 10);
@@ -374,7 +366,7 @@ jobs:
             // [3] Leer suscripciones Web Push
             console.log('\n[3/4] Leyendo suscripciones Web Push (iOS/Firefox)...');
             const wpData = await firestoreGetAll(projectId, accessToken, 'webpush_subscriptions');
-            const wpDocs = (wpData.documents || []).map(doc => {
+            const wpDocs = (wpData.error ? [] : (wpData.documents || [])).map(doc => {
               const f = doc.fields || {};
               return {
                 endpoint: (f.endpoint?.stringValue) || '',
