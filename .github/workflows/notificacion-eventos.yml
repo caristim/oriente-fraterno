@@ -334,7 +334,8 @@ jobs:
 
             console.log(`  Total eventos en Firestore: ${todosLosEventos.length}`);
             const eventos = todosLosEventos.filter(e => e.fecha === fechaHoy);
-
+console.log('  Primeros 5 eventos con fecha:');
+todosLosEventos.slice(0, 5).forEach(e => console.log(`    ${e.nombre}: ${e.fecha}`));
             if (eventos.length === 0) {
               console.log(`\nHoy (${fechaHoy}) no hay eventos. No se envían notificaciones.`);
               // Mostrar próximos eventos (opcional)
