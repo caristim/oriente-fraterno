@@ -1,14 +1,18 @@
-// Oriente Fraterno 148 — Service Worker v24.2
-// MEJORAS: logs más detallados, manejo de push más robusto, y eliminación de duplicados.
+// Oriente Fraterno 148 — Service Worker v24.0
+// CORRECCIÓN v24 (app cerrada en Android/iOS):
+//   1. Un solo handler push que NUNCA descarta mensajes FCM.
+//   2. Sin depender del SDK Firebase en el SW (importScripts fallaba en móvil).
+//   3. FCM con notification payload: el browser lo muestra; el SW solo marca fired.
+//   4. Web Push nativo (iOS PWA / Firefox): parseo JSON + texto plano.
 
-const SW_VERSION    = 'of-sw-v24.2';
+const SW_VERSION    = 'of-sw-v24.0';
 const DB_NAME       = 'of_sw';
 const APP_ROOT      = 'https://caristim.github.io/oriente-fraterno/';
 const APP_URL       = 'https://caristim.github.io/oriente-fraterno/';
 const ICON_192      = 'https://caristim.github.io/oriente-fraterno/icon-192.png';
 const BADGE_URL     = 'https://caristim.github.io/oriente-fraterno/icon-192.png';
 
-const CACHE_NAME    = 'of-cache-v24.2';
+const CACHE_NAME    = 'of-cache-v24.0';
 const PRECACHE_URLS = [
   APP_ROOT,
   APP_ROOT + 'index.html',
@@ -43,37 +47,46 @@ async function showPushNotification(titulo, cuerpo, url, evTag) {
 
 async function handlePushEvent(e) {
   const raw = readPushJson(e);
-  console.log('[SW-Push] Payload recibido:', raw);
 
-  // Valores por defecto
+  if (!raw) {
+    const text = e.data ? (() => { try { return e.data.text(); } catch (_) { return ''; } })() : '';
+    await showPushNotification(
+      'Oriente Fraterno 148',
+      text || 'Tenés un evento hoy ✦',
+      APP_URL,
+      'of-' + Date.now()
+    );
+    return;
+  }
+
+  const isFCM = !!(raw.from || raw.fcmMessageId);
+
+  // Android/Chrome: FCM con notification payload lo muestra el browser automáticamente
+  if (isFCM && raw.notification && (raw.notification.title || raw.notification.body)) {
+    console.log('[SW-Push] FCM notification payload — auto-display del browser');
+    await markFiredToday();
+    return;
+  }
+
   let titulo = 'Oriente Fraterno 148';
   let cuerpo = 'Tenés un evento hoy ✦';
   let url    = APP_URL;
   let evTag  = 'of-' + Date.now();
 
-  if (raw) {
-    // Extraer de notificación o data
-    if (raw.notification) {
-      titulo = raw.notification.title || titulo;
-      cuerpo = raw.notification.body  || cuerpo;
-      if (raw.data && raw.data.url) url = raw.data.url;
-      if (raw.data && raw.data.tag) evTag = raw.data.tag;
-    } else if (raw.data) {
-      titulo = raw.data.title || titulo;
-      cuerpo = raw.data.body  || cuerpo;
-      url    = raw.data.url   || url;
-      evTag  = raw.data.tag   || evTag;
-    } else {
-      titulo = raw.title || titulo;
-      cuerpo = raw.body  || cuerpo;
-      url    = raw.url   || url;
-      evTag  = raw.tag   || evTag;
-    }
+  if (isFCM && raw.data && typeof raw.data === 'object') {
+    const d = raw.data;
+    titulo = d.title || titulo;
+    cuerpo = d.body  || cuerpo;
+    url    = d.url   || url;
+    evTag  = d.tag   || evTag;
+  } else {
+    titulo = raw.title || titulo;
+    cuerpo = raw.body  || cuerpo;
+    url    = raw.url   || url;
+    evTag  = raw.tag   || evTag;
   }
 
-  // Si el evento push vino con datos, siempre mostramos la notificación
-  // (incluso si el navegador ya la mostró, usamos el mismo tag para reemplazar)
-  console.log('[SW-Push] Mostrando notificación manual:', titulo, '|', cuerpo);
+  console.log('[SW-Push] Mostrando notificación:', titulo, '|', cuerpo);
   await showPushNotification(titulo, cuerpo, url, evTag);
 }
 
@@ -131,13 +144,70 @@ async function checkAndNotify() {
 }
 
 async function markFiredToday() {
-  // (mismo código que antes, no se modifica)
+  try {
+    const events = await dbGet('events');
+    if (!Array.isArray(events) || events.length === 0) return;
+    const now   = new Date();
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    const fired = (await dbGet('fired')) || {};
+    let changed = false;
+
+    for (const ev of events) {
+      if (!ev.fecha || !ev.nombre) continue;
+      const parts = String(ev.fecha).split('-');
+      let month, day;
+      if (parts.length === 2)      [month, day] = parts.map(Number);
+      else if (parts.length === 3) [, month, day] = parts.map(Number);
+      else continue;
+      if (!month || !day) continue;
+
+      const evDay = new Date(now.getFullYear(), month - 1, day);
+      if (evDay.getTime() !== today.getTime()) continue;
+
+      const evId    = ev.docId || ev.id || `${ev.nombre}-${ev.fecha}`;
+      const fireKey = `${evId}-${now.getFullYear()}`;
+      if (!fired[fireKey]) { fired[fireKey] = true; changed = true; }
+    }
+    if (changed) await dbSet('fired', fired);
+  } catch (err) {
+    console.warn('[SW] markFiredToday error:', err);
+  }
 }
 
-// ── IndexedDB helpers (sin cambios) ──────────────────────────────────────
-function openDB() { /* ... */ }
-async function dbGet(key) { /* ... */ }
-async function dbSet(key, value) { /* ... */ }
+// ── IndexedDB helpers ─────────────────────────────────────────────────────────
+function openDB() {
+  return new Promise((res, rej) => {
+    const req = indexedDB.open(DB_NAME, 1);
+    req.onupgradeneeded = e => {
+      const db = e.target.result;
+      if (!db.objectStoreNames.contains('kv')) db.createObjectStore('kv');
+    };
+    req.onsuccess = e => res(e.target.result);
+    req.onerror   = e => rej(e.target.error);
+  });
+}
+async function dbGet(key) {
+  try {
+    const db = await openDB();
+    return new Promise((res, rej) => {
+      const tx = db.transaction('kv', 'readonly');
+      const r  = tx.objectStore('kv').get(key);
+      r.onsuccess = () => res(r.result ?? null);
+      r.onerror   = () => rej(r.error);
+    });
+  } catch (_) { return null; }
+}
+async function dbSet(key, value) {
+  try {
+    const db = await openDB();
+    return new Promise((res, rej) => {
+      const tx = db.transaction('kv', 'readwrite');
+      tx.objectStore('kv').put(value, key);
+      tx.oncomplete = res;
+      tx.onerror    = () => rej(tx.error);
+    });
+  } catch (_) {}
+}
 
 // ── Lifecycle ─────────────────────────────────────────────────────────────────
 self.addEventListener('install', e => {
@@ -178,9 +248,48 @@ self.addEventListener('message', async e => {
   if (e.data.type === 'SKIP_WAITING') self.skipWaiting();
 });
 
-// ── Fetch (sin cambios) ─────────────────────────────────────────────────────
-self.addEventListener('fetch', e => { /* ... */ });
+// ── Fetch ─────────────────────────────────────────────────────────────────────
+self.addEventListener('fetch', e => {
+  if (e.request.method !== 'GET') return;
+  const url = e.request.url;
+  if (url.startsWith(APP_ROOT)) {
+    e.respondWith(
+      caches.match(e.request).then(cached => {
+        if (cached) return cached;
+        return fetch(e.request).then(response => {
+          if (response && response.status === 200) {
+            caches.open(CACHE_NAME).then(c => c.put(e.request, response.clone()));
+          }
+          return response;
+        }).catch(() =>
+          caches.match(APP_ROOT + 'index.html')
+            .then(fb => fb || new Response('Sin conexión', { status: 503 }))
+        );
+      })
+    );
+    return;
+  }
+  e.respondWith(
+    fetch(e.request).catch(() =>
+      caches.match(e.request)
+        .then(c => c || new Response('Sin conexión', { status: 503 }))
+    )
+  );
+});
 
-// ── Notificationclick (sin cambios) ─────────────────────────────────────────
-self.addEventListener('notificationclick', e => { /* ... */ });
-self.addEventListener('notificationclose', e => { /* ... */ });
+// ── Notificationclick ─────────────────────────────────────────────────────────
+self.addEventListener('notificationclick', e => {
+  e.notification.close();
+  const targetUrl = (e.notification.data && e.notification.data.url) || APP_URL;
+  e.waitUntil(
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(clients => {
+      const appClient = clients.find(c => c.url.startsWith(APP_ROOT));
+      if (appClient) return appClient.focus();
+      return self.clients.openWindow(targetUrl);
+    })
+  );
+});
+
+self.addEventListener('notificationclose', e => {
+  console.log('[SW] Notificación cerrada:', e.notification.tag);
+});
