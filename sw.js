@@ -1,18 +1,17 @@
-// Oriente Fraterno 148 — Service Worker v24.0
-// CORRECCIÓN v24 (app cerrada en Android/iOS):
-//   1. Un solo handler push que NUNCA descarta mensajes FCM.
-//   2. Sin depender del SDK Firebase en el SW (importScripts fallaba en móvil).
-//   3. FCM con notification payload: el browser lo muestra; el SW solo marca fired.
-//   4. Web Push nativo (iOS PWA / Firefox): parseo JSON + texto plano.
+// Oriente Fraterno 148 — Service Worker v24.2
+// CORRECCIÓN v24.2:
+//   - El payload FCM ahora viene SIN campo "notification" (solo "data").
+//     handlePushEvent() lee correctamente raw.data.title / raw.data.body.
+//   - Texto del fallback corregido a tuteo.
 
-const SW_VERSION    = 'of-sw-v24.0';
+const SW_VERSION    = 'of-sw-v24.2';
 const DB_NAME       = 'of_sw';
 const APP_ROOT      = 'https://caristim.github.io/oriente-fraterno/';
 const APP_URL       = 'https://caristim.github.io/oriente-fraterno/';
 const ICON_192      = 'https://caristim.github.io/oriente-fraterno/icon-192.png';
 const BADGE_URL     = 'https://caristim.github.io/oriente-fraterno/icon-192.png';
 
-const CACHE_NAME    = 'of-cache-v24.0';
+const CACHE_NAME    = 'of-cache-v24.2';
 const PRECACHE_URLS = [
   APP_ROOT,
   APP_ROOT + 'index.html',
@@ -21,7 +20,11 @@ const PRECACHE_URLS = [
   APP_ROOT + 'icon-512.png',
 ];
 
-// ── Push: parseo unificado (FCM + Web Push nativo) ────────────────────────
+// ── Push: parseo unificado ────────────────────────────────────────────────────
+// El workflow ahora envía SOLO el campo "data" (sin "notification").
+// El payload llega como: { data: { title, body, url, tag } }
+// Esto garantiza que el SW siempre intercepta el push, incluso con app cerrada,
+// en Android, Chrome, Edge e iOS Safari PWA.
 function readPushJson(e) {
   if (!e.data) return null;
   try { return e.data.json(); } catch (_) {}
@@ -34,13 +37,13 @@ function readPushJson(e) {
 
 async function showPushNotification(titulo, cuerpo, url, evTag) {
   await self.registration.showNotification(titulo, {
-    body: cuerpo,
-    icon: ICON_192,
-    badge: BADGE_URL,
-    tag: evTag,
+    body:               cuerpo,
+    icon:               ICON_192,
+    badge:              BADGE_URL,
+    tag:                evTag,
     requireInteraction: true,
-    vibrate: [200, 100, 200, 100, 200],
-    data: { url },
+    vibrate:            [200, 100, 200, 100, 200],
+    data:               { url },
   });
   await markFiredToday();
 }
@@ -48,37 +51,35 @@ async function showPushNotification(titulo, cuerpo, url, evTag) {
 async function handlePushEvent(e) {
   const raw = readPushJson(e);
 
+  // Sin datos: mostrar notificación genérica
   if (!raw) {
     const text = e.data ? (() => { try { return e.data.text(); } catch (_) { return ''; } })() : '';
     await showPushNotification(
       'Oriente Fraterno 148',
-      text || 'Tenés un evento hoy ✦',
+      text || 'Tienes un evento hoy ✦',
       APP_URL,
       'of-' + Date.now()
     );
     return;
   }
 
-  const isFCM = !!(raw.from || raw.fcmMessageId);
-
-  // Android/Chrome: FCM con notification payload lo muestra el browser automáticamente
-  if (isFCM && raw.notification && (raw.notification.title || raw.notification.body)) {
-    console.log('[SW-Push] FCM notification payload — auto-display del browser');
-    await markFiredToday();
-    return;
-  }
-
   let titulo = 'Oriente Fraterno 148';
-  let cuerpo = 'Tenés un evento hoy ✦';
+  let cuerpo = 'Tienes un evento hoy ✦';
   let url    = APP_URL;
   let evTag  = 'of-' + Date.now();
 
-  if (isFCM && raw.data && typeof raw.data === 'object') {
-    const d = raw.data;
-    titulo = d.title || titulo;
-    cuerpo = d.body  || cuerpo;
-    url    = d.url   || url;
-    evTag  = d.tag   || evTag;
+  // El workflow envía solo "data" (sin "notification").
+  // Este bloque cubre también payloads legacy que aún tuvieran "notification".
+  if (raw.notification) {
+    titulo = raw.notification.title || titulo;
+    cuerpo = raw.notification.body  || cuerpo;
+    if (raw.data && raw.data.url) url   = raw.data.url;
+    if (raw.data && raw.data.tag) evTag = raw.data.tag;
+  } else if (raw.data) {
+    titulo = raw.data.title || titulo;
+    cuerpo = raw.data.body  || cuerpo;
+    url    = raw.data.url   || url;
+    evTag  = raw.data.tag   || evTag;
   } else {
     titulo = raw.title || titulo;
     cuerpo = raw.body  || cuerpo;
@@ -97,7 +98,9 @@ self.addEventListener('push', e => {
   }));
 });
 
-// ── CANAL LOCAL: respaldo con app abierta ─────────────────────────────────
+// ── Canal local: respaldo cuando la app está abierta ─────────────────────────
+// Se activa al recibir SCHEDULE_EVENTS desde la app.
+// Detecta si hoy hay algún evento y muestra la notificación si aún no se disparó.
 async function checkAndNotify() {
   try {
     const events = await dbGet('events');
@@ -125,11 +128,13 @@ async function checkAndNotify() {
 
       try {
         await self.registration.showNotification('Oriente Fraterno 148', {
-          body: `Hoy: ${ev.tipo} de ${ev.nombre}`,
-          icon: ICON_192, badge: BADGE_URL,
-          tag: `of-local-${evId}`, requireInteraction: true,
-          vibrate: [200, 100, 200, 100, 200],
-          data: { url: APP_URL },
+          body:               `Hoy: ${ev.tipo} de ${ev.nombre}`,
+          icon:               ICON_192,
+          badge:              BADGE_URL,
+          tag:                `of-local-${evId}`,
+          requireInteraction: true,
+          vibrate:            [200, 100, 200, 100, 200],
+          data:               { url: APP_URL },
         });
         fired[fireKey] = true;
         changed = true;
