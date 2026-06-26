@@ -2,17 +2,15 @@ name: Notificacion Eventos 9AM
 
 on:
   schedule:
-    # CORRECCIÓN: Uruguay es UTC-3 TODO EL AÑO (abolió el horario de verano en 2015).
+    # Uruguay es UTC-3 TODO EL AÑO (abolió el horario de verano en 2015).
     # 09:00 UYT = 12:00 UTC.
-    # Se agregan dos horarios para compensar posibles demoras de GitHub Actions
-    # (GitHub no garantiza ejecución exacta; puede demorar hasta 1 hora).
     - cron: '0 12 * * *'   # 09:00 Uruguay (disparo principal)
   workflow_dispatch:         # Ejecución manual para pruebas
 
 jobs:
   enviar-notificacion:
     runs-on: ubuntu-latest
-    timeout-minutes: 10      # Evitar que el job cuelgue indefinidamente
+    timeout-minutes: 10
 
     steps:
       - name: Instalar dependencias
@@ -44,7 +42,7 @@ jobs:
           for (const v of requiredEnvVars) {
             if (!process.env[v]) {
               console.error(`❌ Variable de entorno faltante: ${v}`);
-              console.error('   Verificá los Secrets en Settings → Secrets and variables → Actions.');
+              console.error('   Verifica los Secrets en Settings → Secrets and variables → Actions.');
               process.exit(1);
             }
           }
@@ -56,8 +54,6 @@ jobs:
             process.env.VAPID_PRIVATE_KEY
           );
 
-          // GCM API Key (opcional): solo ayuda a web-push con endpoints Chrome legacy.
-          // Android/Chrome usa FCM HTTP v1 (OAuth2 + service account), no la necesita.
           const GCM_API_KEY = process.env.FIREBASE_SERVER_KEY;
           if (GCM_API_KEY) {
             webpush.setGCMAPIKey(GCM_API_KEY);
@@ -166,18 +162,20 @@ jobs:
             });
           }
 
-          // ── Envío FCM: notification + data (Android con app cerrada) ─────────
+          // ── Envío FCM: SOLO data (sin notification) para que el SW intercepte ──
+          // CORRECCIÓN CRÍTICA: si el payload incluye "notification:{}" a nivel raíz,
+          // Android/Chrome lo muestra directamente sin pasar por el Service Worker,
+          // lo que impide mostrar la notificación con requireInteraction, vibrate, etc.
+          // y en muchos casos la notificación directamente no aparece con la app cerrada.
+          // Solución: enviar SOLO el campo "data", y dejar que el SW haga showNotification().
           function fcmSend(projectId, accessToken, token, titulo, cuerpo, tag) {
             return new Promise((resolve, reject) => {
               const appUrl = 'https://caristim.github.io/oriente-fraterno/';
-              const icon   = appUrl + 'icon-192.png';
               const body = JSON.stringify({
                 message: {
                   token: token,
-                  notification: {
-                    title: titulo,
-                    body:  cuerpo,
-                  },
+                  // SIN campo "notification" aquí — eso es lo que lo rompía.
+                  // El SW recibe el push y llama showNotification() con todos los parámetros.
                   data: {
                     title: titulo,
                     body:  cuerpo,
@@ -187,23 +185,11 @@ jobs:
                   android: {
                     priority: 'high',
                     ttl:      '86400s',
-                    notification: {
-                      channel_id: 'of-eventos',
-                      priority:   'HIGH',
-                    },
                   },
                   webpush: {
                     headers: {
                       Urgency: 'high',
                       TTL:     '86400',
-                    },
-                    notification: {
-                      title:              titulo,
-                      body:               cuerpo,
-                      icon:               icon,
-                      badge:              icon,
-                      tag:                tag,
-                      requireInteraction: true,
                     },
                     fcm_options: {
                       link: appUrl,
@@ -251,13 +237,11 @@ jobs:
           // ── Envío Web Push nativo (iOS Safari PWA / Firefox / Edge) ─────────
           async function webPushSend(subscription, titulo, cuerpo, tag) {
             try {
-              // iOS necesita un string plano, pero Chrome/Edge entienden JSON.
-              // Enviamos JSON como string. El SW lo parsea.
               const payload = JSON.stringify({
                 title: titulo,
-                body: cuerpo,
-                url: 'https://caristim.github.io/oriente-fraterno/',
-                tag: tag,
+                body:  cuerpo,
+                url:   'https://caristim.github.io/oriente-fraterno/',
+                tag:   tag,
               });
               await webpush.sendNotification(subscription, payload, {
                 TTL:     86400,
@@ -274,18 +258,19 @@ jobs:
 
           // ── MAIN ─────────────────────────────────────────────────────────────
           async function main() {
-            // CORRECCIÓN: Uruguay es UTC-3 SIN horario de verano (desde 2015).
             const ahora     = new Date();
-            const localTime = new Date(ahora.getTime() - (3 * 60 * 60 * 1000));
-            const dia       = String(localTime.getUTCDate()).padStart(2, '0');
-            const mes       = String(localTime.getUTCMonth() + 1).padStart(2, '0');
+            const opts      = { timeZone: 'America/Montevideo', year: 'numeric', month: '2-digit', day: '2-digit' };
+            const formatter = new Intl.DateTimeFormat('es-UY', opts);
+            const partes    = formatter.format(ahora).split('/');
+            const dia       = partes[1];
+            const mes       = partes[0];
             const fechaHoy  = mes + '-' + dia;  // Formato MM-DD
             const projectId = process.env.FIREBASE_PROJECT_ID;
 
             console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
             console.log('Oriente Fraterno 148 — Notificador de Eventos');
             console.log('Hora UTC:         ', ahora.toISOString());
-            console.log('Hora Uruguay:     ', localTime.getUTCHours().toString().padStart(2,'0') + ':' + localTime.getUTCMinutes().toString().padStart(2,'0'));
+            console.log('Hora Uruguay:     ', new Date().toLocaleString('es-UY', { timeZone: 'America/Montevideo', hour: '2-digit', minute: '2-digit' }));
             console.log('Fecha Uruguay:    ', fechaHoy, '(formato MM-DD)');
             console.log('Firebase Project: ', projectId);
             console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
@@ -325,9 +310,10 @@ jobs:
             if (eventos.length === 0) {
               console.log(`\nHoy (${fechaHoy}) no hay eventos registrados. No se envían notificaciones.`);
               console.log('\nEventos próximos en los siguientes días:');
-              const hoy = new Date(localTime.getUTCFullYear(), localTime.getUTCMonth(), localTime.getUTCDate());
+              const hoy   = new Date();
+              const hoyUY = new Date(hoy.toLocaleString('en-US', { timeZone: 'America/Montevideo' }));
               for (let i = 1; i <= 7; i++) {
-                const d   = new Date(hoy); d.setDate(d.getDate() + i);
+                const d   = new Date(hoyUY); d.setDate(d.getDate() + i);
                 const dm  = String(d.getMonth() + 1).padStart(2,'0');
                 const dd  = String(d.getDate()).padStart(2,'0');
                 const fmt = dm + '-' + dd;
