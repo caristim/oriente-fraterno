@@ -60,7 +60,7 @@ jobs:
           console.log('VAPID configurado ✓');
           console.log('Public key (primeros 20):', process.env.VAPID_PUBLIC_KEY.substring(0,20)+'...');
 
-          // Helpers
+          // ── Helpers ──────────────────────────────────────────────
           function base64url(str) {
             return Buffer.from(str).toString('base64')
               .replace(/\+/g,'-').replace(/\//g,'_').replace(/=/g,'');
@@ -290,13 +290,17 @@ jobs:
 
             console.log('  Total eventos en Firestore:', todosLosEventos.length);
 
-            // 🔥 LOG TEMPORAL: muestra los primeros 5 eventos con su fecha
-            console.log('  Primeros 5 eventos con fecha:');
+            // 🔍 LOG MEJORADO: buscamos eventos con la fecha exacta de hoy
+            console.log('  🔍 Buscando eventos con fecha "'+fechaHoy+'" (hoy):');
+            const eventosHoy = todosLosEventos.filter(e => e.fecha === fechaHoy);
+            console.log('  Encontrados:', eventosHoy.length);
+            eventosHoy.forEach(e => console.log('    '+e.nombre+': '+e.fecha));
+
+            // También mostramos los primeros 5 para contexto (opcional)
+            console.log('  📋 Primeros 5 eventos (contexto):');
             todosLosEventos.slice(0,5).forEach(e => console.log('    '+e.nombre+': '+e.fecha));
 
-            const eventos = todosLosEventos.filter(e => e.fecha === fechaHoy);
-
-            if (eventos.length === 0) {
+            if (eventosHoy.length === 0) {
               console.log('\nHoy ('+fechaHoy+') no hay eventos. No se envían notificaciones.');
               console.log('\nPróximos eventos en 7 días:');
               const hoy = new Date();
@@ -313,8 +317,9 @@ jobs:
               return;
             }
 
-            console.log('  Eventos para hoy:', eventos.map(e => e.nombre+' ('+e.tipo+')').join(', '));
+            console.log('  Eventos para hoy:', eventosHoy.map(e => e.nombre+' ('+e.tipo+')').join(', '));
 
+            // ── Leer tokens ──────────────────────────────────────────
             console.log('\n[2/4] Leyendo tokens FCM...');
             const fcmData = await firestoreGetAll(projectId, accessToken, 'fcm_tokens');
             const fcmDocs = (fcmData.error ? [] : (fcmData.documents || [])).map(doc => ({
@@ -344,11 +349,12 @@ jobs:
               return;
             }
 
+            // ── Enviar notificaciones ──────────────────────────────
             console.log('\n[4/4] Enviando notificaciones...');
             const fcmInvalidos = new Set();
             const wpInvalidos = new Set();
 
-            for (const ev of eventos) {
+            for (const ev of eventosHoy) {
               const titulo = 'Oriente Fraterno 148';
               const cuerpo = 'Hoy: '+ev.tipo+' de '+ev.nombre;
               const tag = 'of-ev-'+ev.nombre
@@ -379,6 +385,7 @@ jobs:
               }
             }
 
+            // ── Limpieza de tokens inválidos ───────────────────────
             if (fcmInvalidos.size) {
               console.log('\nLimpiando '+fcmInvalidos.size+' token(s) FCM inválido(s)...');
               for (const dn of fcmInvalidos) await firestoreDelete(accessToken, dn);
