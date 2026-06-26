@@ -279,6 +279,13 @@ jobs:
               process.exit(1);
             }
 
+            // 🔍 NUEVO: Mostrar nombres de campos del primer documento para depuración
+            if (eventosData.documents.length > 0) {
+              const primerDoc = eventosData.documents[0];
+              const campos = Object.keys(primerDoc.fields || {});
+              console.log('  📋 Nombres de campos del primer documento:', campos.join(', '));
+            }
+
             const todosLosEventos = (eventosData.documents || []).map(doc => {
               const f = doc.fields || {};
               return {
@@ -290,13 +297,13 @@ jobs:
 
             console.log('  Total eventos en Firestore:', todosLosEventos.length);
 
-            // 🔍 LOG MEJORADO: buscamos eventos con la fecha exacta de hoy
+            // 🔍 Buscamos eventos con la fecha exacta de hoy
             console.log('  🔍 Buscando eventos con fecha "'+fechaHoy+'" (hoy):');
             const eventosHoy = todosLosEventos.filter(e => e.fecha === fechaHoy);
             console.log('  Encontrados:', eventosHoy.length);
             eventosHoy.forEach(e => console.log('    '+e.nombre+': '+e.fecha));
 
-            // También mostramos los primeros 5 para contexto (opcional)
+            // Mostramos los primeros 5 para contexto
             console.log('  📋 Primeros 5 eventos (contexto):');
             todosLosEventos.slice(0,5).forEach(e => console.log('    '+e.nombre+': '+e.fecha));
 
