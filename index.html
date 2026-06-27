@@ -55,14 +55,13 @@
 
     if (typeof firebase !== 'undefined' && typeof firebase.messaging === 'function') {
       try {
+        // onMessage solo dispara cuando la app está en foreground.
+        // NO llamamos new Notification() aquí porque:
+        //   1. En iOS PWA new Notification() desde el hilo principal siempre falla.
+        //   2. En Android puede interferir con el Service Worker que ya maneja el push.
+        // El Service Worker (sw.js) muestra la notificación correctamente en todos los casos.
         firebase.messaging().onMessage(payload => {
-          const data = payload.data || {};
-          if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
-            new Notification(data.title || 'Oriente Fraterno 148', {
-              body: data.body || 'Tenés un evento hoy ✦',
-              icon: 'https://caristim.github.io/oriente-fraterno/icon-192.png',
-            });
-          }
+          console.log('[FCM] Mensaje recibido en foreground (el SW lo procesará):', payload.data);
         });
       } catch(e) { console.warn('[FCM] onMessage no disponible:', e.message); }
     }
@@ -79,10 +78,12 @@
       const base = (b64 + pad).replace(/-/g,'+').replace(/_/g,'/');
       return Uint8Array.from(atob(base), c => c.charCodeAt(0));
     }
-    function hashEndpoint(ep) {
-      let h = 0;
-      for (let i = 0; i < ep.length; i++) h = Math.imul(31,h) + ep.charCodeAt(i) | 0;
-      return 'wp_' + Math.abs(h).toString(36);
+    // SHA-1 via SubtleCrypto: produce 40 chars hex, colisiones prácticamente imposibles.
+    // Nota: los docs Firestore existentes con el hash viejo serán reemplazados
+    // automáticamente la próxima vez que cada usuario abra la app (renovarRegistros).
+    async function hashEndpoint(ep) {
+      const buf = await crypto.subtle.digest('SHA-1', new TextEncoder().encode(ep));
+      return 'wp_' + Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2,'0')).join('');
     }
 
     async function registrarWebPush(reg) {
@@ -97,7 +98,7 @@
         const j = sub.toJSON();
         if (!j.endpoint || !j.keys || !j.keys.p256dh || !j.keys.auth) return false;
         const platform = isIOS() ? 'ios' : isFirefox() ? 'firefox' : 'chromium';
-        await db.collection('webpush_subscriptions').doc(hashEndpoint(j.endpoint)).set({
+        await db.collection('webpush_subscriptions').doc(await hashEndpoint(j.endpoint)).set({
           endpoint: j.endpoint, p256dh: j.keys.p256dh, auth: j.keys.auth,
           platform, updatedAt: new Date().toISOString(),
         });
@@ -134,7 +135,7 @@
         if (!sub) return;
         const j = sub.toJSON();
         if (j.endpoint) {
-          try { await db.collection('webpush_subscriptions').doc(hashEndpoint(j.endpoint)).delete(); } catch(_) {}
+          try { await db.collection('webpush_subscriptions').doc(await hashEndpoint(j.endpoint)).delete(); } catch(_) {}
         }
         await sub.unsubscribe();
       } catch(_) {}
@@ -168,7 +169,7 @@
             const j = sub.toJSON();
             if (j.endpoint && j.keys && j.keys.p256dh && j.keys.auth) {
               const platform = isIOS() ? 'ios' : 'firefox';
-              await db.collection('webpush_subscriptions').doc(hashEndpoint(j.endpoint)).set({
+              await db.collection('webpush_subscriptions').doc(await hashEndpoint(j.endpoint)).set({
                 endpoint: j.endpoint, p256dh: j.keys.p256dh, auth: j.keys.auth,
                 platform, updatedAt: new Date().toISOString(),
               });
@@ -478,8 +479,9 @@
             setEvents(evs);
             saveEventsLocal(evs);
             setLoading(false);
-            if (typeof Notification !== 'undefined' && Notification.permission === 'granted')
-              syncEventsToSW(evs);
+            // Siempre sincronizar eventos al SW (SCHEDULE_EVENTS solo escribe en IndexedDB,
+            // no muestra notificaciones, por lo que no requiere permiso de Notification).
+            syncEventsToSW(evs);
           },
           err => { console.error('[App] Firestore error:', err); setLoading(false); }
         );
