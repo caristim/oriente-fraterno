@@ -183,8 +183,8 @@ jobs:
                     tag:   tag,
                   },
                   android: {
-                    priority: 'high',
-                    ttl:      '86400s',
+                    priority: 'HIGH',  // Enum AndroidMessagePriority: debe ser 'HIGH' o 'NORMAL' (mayúsculas).
+                    ttl:      '86400s', // Con 'high' en minúsculas FCM lo ignora → Android Doze difiere el mensaje horas.
                   },
                   webpush: {
                     headers: {
