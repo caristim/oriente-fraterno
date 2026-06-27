@@ -259,18 +259,22 @@ jobs:
           // ── MAIN ─────────────────────────────────────────────────────────────
           async function main() {
             const ahora     = new Date();
-            const opts      = { timeZone: 'America/Montevideo', year: 'numeric', month: '2-digit', day: '2-digit' };
-            const formatter = new Intl.DateTimeFormat('es-UY', opts);
-            const partes    = formatter.format(ahora).split('/');
-            const dia       = partes[1];
-            const mes       = partes[0];
-            const fechaHoy  = mes + '-' + dia;  // Formato MM-DD
+
+            // CORRECCIÓN: 'es-UY' en Ubuntu devuelve DD/MM/YYYY, por lo que
+            // parsear por índice de partes daba fechaHoy = DD-MM en vez de MM-DD.
+            // Solución robusta: convertir la hora a Uruguay y leer getMonth/getDate
+            // directamente, sin depender del locale del runner de GitHub Actions.
+            const uyStr   = ahora.toLocaleString('en-US', { timeZone: 'America/Montevideo' });
+            const uyDate  = new Date(uyStr);
+            const mes     = String(uyDate.getMonth() + 1).padStart(2, '0');
+            const dia     = String(uyDate.getDate()).padStart(2, '0');
+            const fechaHoy = mes + '-' + dia;  // Formato MM-DD (igual que Firestore)
             const projectId = process.env.FIREBASE_PROJECT_ID;
 
             console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
             console.log('Oriente Fraterno 148 — Notificador de Eventos');
             console.log('Hora UTC:         ', ahora.toISOString());
-            console.log('Hora Uruguay:     ', new Date().toLocaleString('es-UY', { timeZone: 'America/Montevideo', hour: '2-digit', minute: '2-digit' }));
+            console.log('Hora Uruguay:     ', uyDate.toLocaleTimeString('es-UY', { hour: '2-digit', minute: '2-digit' }));
             console.log('Fecha Uruguay:    ', fechaHoy, '(formato MM-DD)');
             console.log('Firebase Project: ', projectId);
             console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
