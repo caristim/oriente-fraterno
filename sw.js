@@ -1,17 +1,21 @@
-// Oriente Fraterno 148 — Service Worker v24.2
-// CORRECCIÓN v24.2:
-//   - El payload FCM ahora viene SIN campo "notification" (solo "data").
-//     handlePushEvent() lee correctamente raw.data.title / raw.data.body.
-//   - Texto del fallback corregido a tuteo.
+// Oriente Fraterno 148 — Service Worker v24.3
+// CORRECCIÓN v24.3:
+//   - showPushNotification() ya no llama markFiredToday() (que necesitaba
+//     IndexedDB llena, solo posible con la app abierta). Ahora guarda
+//     directamente fired[evTag] = true usando el tag del propio push.
+//   - checkAndNotify() genera el tag con el mismo algoritmo que el workflow
+//     ('of-ev-' + nombre-normalizado + '-' + MM-DD), por lo que coincide con
+//     el tag guardado por el push externo y evita la doble notificación.
+//   - Se elimina markFiredToday() — ya no es necesaria.
 
-const SW_VERSION    = 'of-sw-v24.2';
+const SW_VERSION    = 'of-sw-v24.3';
 const DB_NAME       = 'of_sw';
 const APP_ROOT      = 'https://caristim.github.io/oriente-fraterno/';
 const APP_URL       = 'https://caristim.github.io/oriente-fraterno/';
 const ICON_192      = 'https://caristim.github.io/oriente-fraterno/icon-192.png';
 const BADGE_URL     = 'https://caristim.github.io/oriente-fraterno/icon-192.png';
 
-const CACHE_NAME    = 'of-cache-v24.2';
+const CACHE_NAME    = 'of-cache-v24.3';
 const PRECACHE_URLS = [
   APP_ROOT,
   APP_ROOT + 'index.html',
@@ -20,11 +24,22 @@ const PRECACHE_URLS = [
   APP_ROOT + 'icon-512.png',
 ];
 
-// ── Push: parseo unificado ────────────────────────────────────────────────────
-// El workflow ahora envía SOLO el campo "data" (sin "notification").
-// El payload llega como: { data: { title, body, url, tag } }
-// Esto garantiza que el SW siempre intercepta el push, incluso con app cerrada,
-// en Android, Chrome, Edge e iOS Safari PWA.
+// ── Normalización de nombre (igual que el workflow) ───────────────────────────
+// Genera el mismo tag que notificacion-eventos.yml para el mismo evento,
+// permitiendo que fired{} deduplique entre el push externo y checkAndNotify().
+function normalizarNombre(nombre) {
+  return nombre
+    .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/\s+/g, '-').toLowerCase().substring(0, 30);
+}
+function generarTag(nombre, fecha) {
+  // fecha en formato MM-DD (como viene de Firestore y como usa el workflow)
+  return 'of-ev-' + normalizarNombre(nombre) + '-' + fecha;
+}
+
+// ── Push: parseo unificado (FCM data-only + Web Push nativo) ──────────────────
+// El workflow envía SOLO el campo "data" (sin "notification" a nivel raíz).
+// Esto garantiza que el SW intercepta el push con la app cerrada en todos los OS.
 function readPushJson(e) {
   if (!e.data) return null;
   try { return e.data.json(); } catch (_) {}
@@ -35,6 +50,8 @@ function readPushJson(e) {
   return null;
 }
 
+// Muestra la notificación y guarda el tag directamente en fired{}.
+// No depende de que IndexedDB tenga la lista de eventos (funciona con app cerrada).
 async function showPushNotification(titulo, cuerpo, url, evTag) {
   await self.registration.showNotification(titulo, {
     body:               cuerpo,
@@ -45,7 +62,18 @@ async function showPushNotification(titulo, cuerpo, url, evTag) {
     vibrate:            [200, 100, 200, 100, 200],
     data:               { url },
   });
-  await markFiredToday();
+  // Guardar el tag directamente en fired{} sin necesitar la lista de eventos.
+  // Cuando el usuario abra la app, checkAndNotify() generará el mismo tag
+  // y lo encontrará en fired{}, evitando la doble notificación.
+  try {
+    const fired = (await dbGet('fired')) || {};
+    if (!fired[evTag]) {
+      fired[evTag] = true;
+      await dbSet('fired', fired);
+    }
+  } catch (err) {
+    console.warn('[SW] No se pudo guardar fired[tag]:', err);
+  }
 }
 
 async function handlePushEvent(e) {
@@ -58,7 +86,7 @@ async function handlePushEvent(e) {
       'Oriente Fraterno 148',
       text || 'Tienes un evento hoy ✦',
       APP_URL,
-      'of-' + Date.now()
+      'of-fallback-' + Date.now()
     );
     return;
   }
@@ -66,10 +94,10 @@ async function handlePushEvent(e) {
   let titulo = 'Oriente Fraterno 148';
   let cuerpo = 'Tienes un evento hoy ✦';
   let url    = APP_URL;
-  let evTag  = 'of-' + Date.now();
+  let evTag  = 'of-fallback-' + Date.now();
 
   // El workflow envía solo "data" (sin "notification").
-  // Este bloque cubre también payloads legacy que aún tuvieran "notification".
+  // Se conserva el bloque legacy por si algún dispositivo tiene payload antiguo en cola.
   if (raw.notification) {
     titulo = raw.notification.title || titulo;
     cuerpo = raw.notification.body  || cuerpo;
@@ -87,7 +115,7 @@ async function handlePushEvent(e) {
     evTag  = raw.tag   || evTag;
   }
 
-  console.log('[SW-Push] Mostrando notificación:', titulo, '|', cuerpo);
+  console.log('[SW-Push] Mostrando notificación:', titulo, '|', cuerpo, '| tag:', evTag);
   await showPushNotification(titulo, cuerpo, url, evTag);
 }
 
@@ -100,11 +128,12 @@ self.addEventListener('push', e => {
 
 // ── Canal local: respaldo cuando la app está abierta ─────────────────────────
 // Se activa al recibir SCHEDULE_EVENTS desde la app.
-// Detecta si hoy hay algún evento y muestra la notificación si aún no se disparó.
+// Usa el mismo algoritmo de tag que el workflow para deduplicar contra fired{}.
 async function checkAndNotify() {
   try {
     const events = await dbGet('events');
     if (!Array.isArray(events) || events.length === 0) return;
+
     const now   = new Date();
     const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
     const fired = (await dbGet('fired')) || {};
@@ -112,32 +141,37 @@ async function checkAndNotify() {
 
     for (const ev of events) {
       if (!ev.fecha || !ev.nombre || !ev.tipo) continue;
-      const parts = String(ev.fecha).split('-');
-      let month, day;
-      if (parts.length === 2)      [month, day] = parts.map(Number);
-      else if (parts.length === 3) [, month, day] = parts.map(Number);
-      else continue;
-      if (!month || !day) continue;
 
-      const evDay = new Date(now.getFullYear(), month - 1, day);
+      // Normalizar fecha a formato MM-DD
+      const parts = String(ev.fecha).split('-');
+      let mes, dia;
+      if (parts.length === 2)      [mes, dia] = parts;
+      else if (parts.length === 3) [, mes, dia] = parts;
+      else continue;
+      if (!mes || !dia) continue;
+
+      const evDay = new Date(now.getFullYear(), Number(mes) - 1, Number(dia));
       if (evDay.getTime() !== today.getTime()) continue;
 
-      const evId    = ev.docId || ev.id || `${ev.nombre}-${ev.fecha}`;
-      const fireKey = `${evId}-${now.getFullYear()}`;
-      if (fired[fireKey]) continue;
+      // Generar el mismo tag que el workflow para poder cruzar con fired{}
+      const fechaMD = mes.padStart(2, '0') + '-' + dia.padStart(2, '0');
+      const tag     = generarTag(ev.nombre, fechaMD);
+
+      // Si el push externo ya disparó esta notificación hoy, no duplicar
+      if (fired[tag]) continue;
 
       try {
         await self.registration.showNotification('Oriente Fraterno 148', {
           body:               `Hoy: ${ev.tipo} de ${ev.nombre}`,
           icon:               ICON_192,
           badge:              BADGE_URL,
-          tag:                `of-local-${evId}`,
+          tag:                tag,
           requireInteraction: true,
           vibrate:            [200, 100, 200, 100, 200],
           data:               { url: APP_URL },
         });
-        fired[fireKey] = true;
-        changed = true;
+        fired[tag] = true;
+        changed    = true;
       } catch (notifErr) {
         console.warn('[SW] showNotification falló:', notifErr.message);
       }
@@ -145,37 +179,6 @@ async function checkAndNotify() {
     if (changed) await dbSet('fired', fired);
   } catch (err) {
     console.warn('[SW] checkAndNotify error:', err);
-  }
-}
-
-async function markFiredToday() {
-  try {
-    const events = await dbGet('events');
-    if (!Array.isArray(events) || events.length === 0) return;
-    const now   = new Date();
-    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
-    const fired = (await dbGet('fired')) || {};
-    let changed = false;
-
-    for (const ev of events) {
-      if (!ev.fecha || !ev.nombre) continue;
-      const parts = String(ev.fecha).split('-');
-      let month, day;
-      if (parts.length === 2)      [month, day] = parts.map(Number);
-      else if (parts.length === 3) [, month, day] = parts.map(Number);
-      else continue;
-      if (!month || !day) continue;
-
-      const evDay = new Date(now.getFullYear(), month - 1, day);
-      if (evDay.getTime() !== today.getTime()) continue;
-
-      const evId    = ev.docId || ev.id || `${ev.nombre}-${ev.fecha}`;
-      const fireKey = `${evId}-${now.getFullYear()}`;
-      if (!fired[fireKey]) { fired[fireKey] = true; changed = true; }
-    }
-    if (changed) await dbSet('fired', fired);
-  } catch (err) {
-    console.warn('[SW] markFiredToday error:', err);
   }
 }
 
