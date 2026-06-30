@@ -34,7 +34,6 @@
   <!-- Firebase SDK -->
   <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-firestore-compat.js"></script>
-  <script src="https://www.gstatic.com/firebasejs/10.8.0/firebase-messaging-compat.js"></script>
 
   <!-- ── Lógica de Firebase + Notificaciones ──────────────────────────── -->
   <script>
@@ -53,34 +52,19 @@
       db = firebase.firestore();
     } catch(e) { console.error('[App] Firebase init error:', e.message); }
 
-    if (typeof firebase !== 'undefined' && typeof firebase.messaging === 'function') {
-      try {
-        // onMessage solo dispara cuando la app está en foreground.
-        // NO llamamos new Notification() aquí porque:
-        //   1. En iOS PWA new Notification() desde el hilo principal siempre falla.
-        //   2. En Android puede interferir con el Service Worker que ya maneja el push.
-        // El Service Worker (sw.js) muestra la notificación correctamente en todos los casos.
-        firebase.messaging().onMessage(payload => {
-          console.log('[FCM] Mensaje recibido en foreground (el SW lo procesará):', payload.data);
-        });
-      } catch(e) { console.warn('[FCM] onMessage no disponible:', e.message); }
-    }
-
-    function isIOS()     { return /iPhone|iPad|iPod/i.test(navigator.userAgent); }
-    function isFirefox() { return /firefox/i.test(navigator.userAgent); }
-    function isFCMCapable() {
-      return !isIOS() && !isFirefox()
-          && typeof firebase !== 'undefined'
-          && typeof firebase.messaging === 'function';
-    }
+    // ── Notificaciones: WebPush nativo puro (sin Firebase Cloud Messaging) ──
+    // Se unifica todo en pushManager.subscribe() + VAPID, igual en Android,
+    // Windows/Edge, iOS y Firefox. Esto evita depender del SW especial que
+    // exige el SDK de Firebase Messaging (firebase-messaging-sw.js), que no
+    // existía en este proyecto y por eso las notificaciones no llegaban con
+    // la app cerrada en Android/Chrome/Edge.
+    function isIOS() { return /iPhone|iPad|iPod/i.test(navigator.userAgent); }
     function urlBase64ToUint8Array(b64) {
       const pad  = '='.repeat((4 - b64.length % 4) % 4);
       const base = (b64 + pad).replace(/-/g,'+').replace(/_/g,'/');
       return Uint8Array.from(atob(base), c => c.charCodeAt(0));
     }
     // SHA-1 via SubtleCrypto: produce 40 chars hex, colisiones prácticamente imposibles.
-    // Nota: los docs Firestore existentes con el hash viejo serán reemplazados
-    // automáticamente la próxima vez que cada usuario abra la app (renovarRegistros).
     async function hashEndpoint(ep) {
       const buf = await crypto.subtle.digest('SHA-1', new TextEncoder().encode(ep));
       return 'wp_' + Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2,'0')).join('');
@@ -97,7 +81,7 @@
         if (!sub) return false;
         const j = sub.toJSON();
         if (!j.endpoint || !j.keys || !j.keys.p256dh || !j.keys.auth) return false;
-        const platform = isIOS() ? 'ios' : isFirefox() ? 'firefox' : 'chromium';
+        const platform = isIOS() ? 'ios' : 'webpush';
         await db.collection('webpush_subscriptions').doc(await hashEndpoint(j.endpoint)).set({
           endpoint: j.endpoint, p256dh: j.keys.p256dh, auth: j.keys.auth,
           platform, updatedAt: new Date().toISOString(),
@@ -107,76 +91,21 @@
       } catch(e) { console.error('[WebPush] Error:', e.message); return false; }
     }
 
-    async function registrarFCM(reg) {
-      try {
-        if (!isFCMCapable() || !db) return false;
-        const messaging = firebase.messaging();
-        const token = await messaging.getToken({
-          vapidKey: VAPID_PUBLIC_KEY, serviceWorkerRegistration: reg,
-        });
-        if (!token) return false;
-        const prev = localStorage.getItem('fcm_token');
-        if (prev && prev !== token) {
-          try { await db.collection('fcm_tokens').doc(prev).delete(); } catch(_) {}
-        }
-        await db.collection('fcm_tokens').doc(token).set({
-          token, platform: 'chromium', updatedAt: new Date().toISOString(),
-        });
-        localStorage.setItem('fcm_token', token);
-        console.log('[FCM] Token OK:', token.substring(0,20) + '...');
-        return true;
-      } catch(e) { console.error('[FCM] Error:', e.message); return false; }
-    }
-
-    async function limpiarWebPushDuplicado(reg) {
-      if (!isFCMCapable() || !db) return;
+    async function renovarRegistros(reg) {
+      if (!db || !('PushManager' in window)) return;
       try {
         const sub = await reg.pushManager.getSubscription();
-        if (!sub) return;
-        const j = sub.toJSON();
-        if (j.endpoint) {
-          try { await db.collection('webpush_subscriptions').doc(await hashEndpoint(j.endpoint)).delete(); } catch(_) {}
-        }
-        await sub.unsubscribe();
-      } catch(_) {}
-    }
-
-    async function renovarRegistros(reg) {
-      if (!db) return;
-      if (isFCMCapable()) {
-        try {
-          const messaging = firebase.messaging();
-          const token = await messaging.getToken({
-            vapidKey: VAPID_PUBLIC_KEY, serviceWorkerRegistration: reg,
-          });
-          if (token) {
-            const prev = localStorage.getItem('fcm_token');
-            if (prev && prev !== token) {
-              try { await db.collection('fcm_tokens').doc(prev).delete(); } catch(_) {}
-            }
-            await db.collection('fcm_tokens').doc(token).set({
-              token, platform: 'chromium', updatedAt: new Date().toISOString(),
+        if (sub) {
+          const j = sub.toJSON();
+          if (j.endpoint && j.keys && j.keys.p256dh && j.keys.auth) {
+            const platform = isIOS() ? 'ios' : 'webpush';
+            await db.collection('webpush_subscriptions').doc(await hashEndpoint(j.endpoint)).set({
+              endpoint: j.endpoint, p256dh: j.keys.p256dh, auth: j.keys.auth,
+              platform, updatedAt: new Date().toISOString(),
             });
-            localStorage.setItem('fcm_token', token);
           }
-        } catch(e) { console.warn('[FCM] Renovación falló:', e.message); }
-        return;
-      }
-      if ('PushManager' in window) {
-        try {
-          const sub = await reg.pushManager.getSubscription();
-          if (sub) {
-            const j = sub.toJSON();
-            if (j.endpoint && j.keys && j.keys.p256dh && j.keys.auth) {
-              const platform = isIOS() ? 'ios' : 'firefox';
-              await db.collection('webpush_subscriptions').doc(await hashEndpoint(j.endpoint)).set({
-                endpoint: j.endpoint, p256dh: j.keys.p256dh, auth: j.keys.auth,
-                platform, updatedAt: new Date().toISOString(),
-              });
-            }
-          }
-        } catch(e) { console.warn('[WebPush] Renovación falló:', e.message); }
-      }
+        }
+      } catch(e) { console.warn('[WebPush] Renovación falló:', e.message); }
     }
 
     async function activarNotificaciones(reg) {
@@ -185,11 +114,7 @@
         const p = await Notification.requestPermission();
         if (p !== 'granted') return false;
       }
-      if (isIOS() || isFirefox()) return registrarWebPush(reg);
-      const ok = await registrarFCM(reg);
-      if (ok) await limpiarWebPushDuplicado(reg);
-      else return registrarWebPush(reg);
-      return ok;
+      return registrarWebPush(reg);
     }
 
     window._activarNotificaciones = activarNotificaciones;
