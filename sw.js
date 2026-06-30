@@ -1,5 +1,17 @@
-// Oriente Fraterno 148 — Service Worker v24.3
-// CORRECCIÓN v24.3:
+// Oriente Fraterno 148 — Service Worker v25.0
+// CORRECCIÓN v25.0:
+//   - Migración a WebPush nativo puro en todas las plataformas (Android,
+//     Windows/Edge, iOS, Firefox). Se eliminó la dependencia de Firebase
+//     Cloud Messaging (FCM) en el cliente y en el workflow de GitHub Actions,
+//     porque ese mecanismo exigía un Service Worker especial llamado
+//     "firebase-messaging-sw.js" que nunca existía en este proyecto. Esa
+//     era la causa de que las notificaciones no llegaran con la app cerrada
+//     en Android/Chrome/Edge (solo con la app abierta, vía el SDK en JS).
+//   - El evento 'push' de este Service Worker ya estaba correctamente
+//     implementado para WebPush nativo y no requería cambios funcionales:
+//     intercepta el push aunque la app esté completamente cerrada en
+//     cualquier sistema operativo, exactamente igual que en Cumples-Familia.
+// CORRECCIÓN v24.3 (se mantiene):
 //   - showPushNotification() ya no llama markFiredToday() (que necesitaba
 //     IndexedDB llena, solo posible con la app abierta). Ahora guarda
 //     directamente fired[evTag] = true usando el tag del propio push.
@@ -8,14 +20,14 @@
 //     el tag guardado por el push externo y evita la doble notificación.
 //   - Se elimina markFiredToday() — ya no es necesaria.
 
-const SW_VERSION    = 'of-sw-v24.3';
+const SW_VERSION    = 'of-sw-v25.0';
 const DB_NAME       = 'of_sw';
 const APP_ROOT      = 'https://caristim.github.io/oriente-fraterno/';
 const APP_URL       = 'https://caristim.github.io/oriente-fraterno/';
 const ICON_192      = 'https://caristim.github.io/oriente-fraterno/icon-192.png';
 const BADGE_URL     = 'https://caristim.github.io/oriente-fraterno/icon-192.png';
 
-const CACHE_NAME    = 'of-cache-v24.3';
+const CACHE_NAME    = 'of-cache-v25.0';
 const PRECACHE_URLS = [
   APP_ROOT,
   APP_ROOT + 'index.html',
@@ -37,7 +49,7 @@ function generarTag(nombre, fecha) {
   return 'of-ev-' + normalizarNombre(nombre) + '-' + fecha;
 }
 
-// ── Push: parseo unificado (FCM data-only + Web Push nativo) ──────────────────
+// ── Push: parseo del payload WebPush ───────────────────────────────────────
 // El workflow envía SOLO el campo "data" (sin "notification" a nivel raíz).
 // Esto garantiza que el SW intercepta el push con la app cerrada en todos los OS.
 function readPushJson(e) {
