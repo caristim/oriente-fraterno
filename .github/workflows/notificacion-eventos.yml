@@ -20,13 +20,25 @@ jobs:
         env:
           FIREBASE_PROJECT_ID:      ${{ secrets.OF_FIREBASE_PROJECT_ID }}
           FIREBASE_SERVICE_ACCOUNT: ${{ secrets.OF_FIREBASE_SERVICE_ACCOUNT }}
-          FIREBASE_SERVER_KEY:      ${{ secrets.OF_FIREBASE_SERVER_KEY }}
           VAPID_PUBLIC_KEY:         ${{ secrets.OF_VAPID_PUBLIC_KEY }}
           VAPID_PRIVATE_KEY:        ${{ secrets.OF_VAPID_PRIVATE_KEY }}
           VAPID_SUBJECT:            ${{ secrets.OF_VAPID_SUBJECT }}
+          GH_EVENT_NAME:            ${{ github.event_name }}
         run: |
           node << 'EOF'
           'use strict';
+          // ════════════════════════════════════════════════════════════════
+          // Oriente Fraterno 148 — Notificador de Eventos (v25.0)
+          // CORRECCIÓN v25.0: se elimina por completo el envío vía Firebase
+          // Cloud Messaging (FCM). Ese mecanismo requería un Service Worker
+          // especial ("firebase-messaging-sw.js") que nunca existió en el
+          // proyecto, y por eso las notificaciones jamás llegaban con la app
+          // cerrada en Android/Chrome/Edge (solo con la app abierta).
+          // Ahora TODO se envía vía WebPush nativo + VAPID, exactamente igual
+          // que en la app Cumples-Familia, que sí notifica con la app cerrada
+          // en Android, Windows/Edge e iOS. Firestore se sigue usando como
+          // base de datos (vía REST + OAuth2), solo cambió el canal de envío.
+          // ════════════════════════════════════════════════════════════════
           const https   = require('https');
           const crypto  = require('crypto');
           const webpush = require('web-push');
@@ -54,15 +66,9 @@ jobs:
             process.env.VAPID_PRIVATE_KEY
           );
 
-          const GCM_API_KEY = process.env.FIREBASE_SERVER_KEY;
-          if (GCM_API_KEY) {
-            webpush.setGCMAPIKey(GCM_API_KEY);
-            console.log('  GCM API Key configurada (opcional)');
-          } else {
-            console.log('  GCM API Key no configurada (opcional, no requerida)');
-          }
+          const ES_MANUAL = process.env.GH_EVENT_NAME === 'workflow_dispatch';
 
-          // ── Helpers JWT para Google OAuth2 ──────────────────────────────────
+          // ── Helpers JWT para Google OAuth2 (necesario para leer/escribir Firestore) ──
           function base64url(str) {
             return Buffer.from(str).toString('base64')
               .replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '');
@@ -74,7 +80,7 @@ jobs:
               const header  = { alg: 'RS256', typ: 'JWT' };
               const payload = {
                 iss:   sa.client_email,
-                scope: 'https://www.googleapis.com/auth/firebase.messaging https://www.googleapis.com/auth/datastore',
+                scope: 'https://www.googleapis.com/auth/datastore',
                 aud:   'https://oauth2.googleapis.com/token',
                 iat:   now,
                 exp:   now + 3600,
@@ -157,90 +163,18 @@ jobs:
                   resolve();
                 });
               });
-              req.on('error', e => { console.warn('  Error eliminando token:', e.message); resolve(); });
+              req.on('error', e => { console.warn('  Error eliminando suscripción:', e.message); resolve(); });
               req.end();
             });
           }
 
-          // ── Envío FCM: SOLO data (sin notification) para que el SW intercepte ──
-          // CORRECCIÓN CRÍTICA: si el payload incluye "notification:{}" a nivel raíz,
-          // Android/Chrome lo muestra directamente sin pasar por el Service Worker,
-          // lo que impide mostrar la notificación con requireInteraction, vibrate, etc.
-          // y en muchos casos la notificación directamente no aparece con la app cerrada.
-          // Solución: enviar SOLO el campo "data", y dejar que el SW haga showNotification().
-          function fcmSend(projectId, accessToken, token, titulo, cuerpo, tag) {
-            return new Promise((resolve, reject) => {
-              const appUrl = 'https://caristim.github.io/oriente-fraterno/';
-              const body = JSON.stringify({
-                message: {
-                  token: token,
-                  // SIN campo "notification" aquí — eso es lo que lo rompía.
-                  // El SW recibe el push y llama showNotification() con todos los parámetros.
-                  data: {
-                    title: titulo,
-                    body:  cuerpo,
-                    url:   appUrl,
-                    tag:   tag,
-                  },
-                  android: {
-                    priority: 'HIGH',  // Enum AndroidMessagePriority: debe ser 'HIGH' o 'NORMAL' (mayúsculas).
-                    ttl:      '86400s', // Con 'high' en minúsculas FCM lo ignora → Android Doze difiere el mensaje horas.
-                  },
-                  webpush: {
-                    headers: {
-                      Urgency: 'high',
-                      TTL:     '86400',
-                    },
-                    fcm_options: {
-                      link: appUrl,
-                    },
-                  },
-                },
-              });
-
-              const req = https.request({
-                hostname: 'fcm.googleapis.com',
-                path:     '/v1/projects/' + projectId + '/messages:send',
-                method:   'POST',
-                headers:  {
-                  'Content-Type':  'application/json',
-                  'Authorization': 'Bearer ' + accessToken,
-                },
-              }, res => {
-                let r = '';
-                res.on('data', c => r += c);
-                res.on('end', () => {
-                  let parsed = {};
-                  try { parsed = JSON.parse(r); } catch(_) {}
-                  if (parsed.error) {
-                    const details   = parsed.error.details || [];
-                    const fcmErr    = details.find(d => d.errorCode);
-                    const errorCode = fcmErr ? fcmErr.errorCode : (parsed.error.status || 'UNKNOWN');
-                    const invalid   = ['UNREGISTERED', 'INVALID_ARGUMENT'].includes(errorCode);
-                    console.log(`  FCM [${errorCode}]: ${token.substring(0, 24)}... → ${invalid ? 'token inválido (se eliminará)' : 'error temporal'}`);
-                    resolve({ invalid });
-                  } else {
-                    console.log('  FCM ✓ OK: ' + token.substring(0, 24) + '...');
-                    resolve({ invalid: false });
-                  }
-                });
-              });
-              req.on('error', e => {
-                console.warn('  FCM error de red:', e.message);
-                resolve({ invalid: false });
-              });
-              req.write(body);
-              req.end();
-            });
-          }
-
-          // ── Envío Web Push nativo (iOS Safari PWA / Firefox / Edge) ─────────
-          async function webPushSend(subscription, titulo, cuerpo, tag) {
+          // ── Envío Web Push nativo (Android/Chrome/Edge/iOS Safari PWA/Firefox) ──
+          async function webPushSend(subscription, titulo, cuerpo, url, tag) {
             try {
               const payload = JSON.stringify({
                 title: titulo,
                 body:  cuerpo,
-                url:   'https://caristim.github.io/oriente-fraterno/',
+                url:   url,
                 tag:   tag,
               });
               await webpush.sendNotification(subscription, payload, {
@@ -260,19 +194,22 @@ jobs:
           async function main() {
             const ahora     = new Date();
 
-            // CORRECCIÓN: 'es-UY' en Ubuntu devuelve DD/MM/YYYY, por lo que
-            // parsear por índice de partes daba fechaHoy = DD-MM en vez de MM-DD.
-            // Solución robusta: convertir la hora a Uruguay y leer getMonth/getDate
-            // directamente, sin depender del locale del runner de GitHub Actions.
+            // 'es-UY' en Ubuntu devuelve DD/MM/YYYY, por lo que parsear por
+            // índice de partes daba fechaHoy = DD-MM en vez de MM-DD.
+            // Solución robusta: convertir la hora a Uruguay y leer
+            // getMonth/getDate directamente, sin depender del locale del
+            // runner de GitHub Actions.
             const uyStr   = ahora.toLocaleString('en-US', { timeZone: 'America/Montevideo' });
             const uyDate  = new Date(uyStr);
             const mes     = String(uyDate.getMonth() + 1).padStart(2, '0');
             const dia     = String(uyDate.getDate()).padStart(2, '0');
             const fechaHoy = mes + '-' + dia;  // Formato MM-DD (igual que Firestore)
             const projectId = process.env.FIREBASE_PROJECT_ID;
+            const appUrl = 'https://caristim.github.io/oriente-fraterno/';
 
             console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
             console.log('Oriente Fraterno 148 — Notificador de Eventos');
+            console.log('Modo:             ', ES_MANUAL ? 'MANUAL (workflow_dispatch)' : 'automático (cron)');
             console.log('Hora UTC:         ', ahora.toISOString());
             console.log('Hora Uruguay:     ', uyDate.toLocaleTimeString('es-UY', { hour: '2-digit', minute: '2-digit' }));
             console.log('Fecha Uruguay:    ', fechaHoy, '(formato MM-DD)');
@@ -290,8 +227,8 @@ jobs:
             const accessToken = await getGoogleToken(sa);
             console.log('Token Google OAuth2: ✓ OK');
 
-            // ── [1/4] Leer eventos de Firestore ─────────────────────────────
-            console.log('\n[1/4] Leyendo eventos de Firestore...');
+            // ── [1/3] Leer eventos de Firestore ─────────────────────────────
+            console.log('\n[1/3] Leyendo eventos de Firestore...');
             const eventosData = await firestoreGetAll(projectId, accessToken, 'eventos');
             if (eventosData.error) {
               console.error('❌ Error crítico leyendo eventos:', JSON.stringify(eventosData.error));
@@ -332,17 +269,8 @@ jobs:
 
             console.log('  Eventos para hoy:', eventos.map(e => `${e.nombre} (${e.tipo})`).join(', '));
 
-            // ── [2/4] Leer tokens FCM ────────────────────────────────────────
-            console.log('\n[2/4] Leyendo tokens FCM (Chrome/Edge/Android)...');
-            const fcmData = await firestoreGetAll(projectId, accessToken, 'fcm_tokens');
-            const fcmDocs = (fcmData.error ? [] : (fcmData.documents || [])).map(doc => ({
-              token:   (doc.fields && doc.fields.token && doc.fields.token.stringValue) || '',
-              docName: doc.name,
-            })).filter(d => d.token.length > 10);
-            console.log('  Tokens FCM registrados:', fcmDocs.length);
-
-            // ── [3/4] Leer suscripciones Web Push ───────────────────────────
-            console.log('\n[3/4] Leyendo suscripciones Web Push (iOS/Firefox)...');
+            // ── [2/3] Leer suscripciones WebPush (todas las plataformas) ─────
+            console.log('\n[2/3] Leyendo suscripciones Web Push (Android/Windows/iOS/Firefox)...');
             const wpData = await firestoreGetAll(projectId, accessToken, 'webpush_subscriptions');
             const wpDocs = (wpData.error ? [] : (wpData.documents || [])).map(doc => {
               const f = doc.fields || {};
@@ -353,21 +281,19 @@ jobs:
                 platform: (f.platform && f.platform.stringValue) || 'unknown',
                 docName:  doc.name,
               };
-            }).filter(d => d.endpoint && d.p256dh && d.auth)
-              .filter(d => d.platform !== 'chromium');
-            console.log('  Suscripciones Web Push (iOS/Firefox):', wpDocs.length);
+            }).filter(d => d.endpoint && d.p256dh && d.auth);
+            console.log('  Suscripciones Web Push registradas:', wpDocs.length);
 
-            if (fcmDocs.length === 0 && wpDocs.length === 0) {
+            if (wpDocs.length === 0) {
               console.log('\n⚠️  No hay dispositivos registrados.');
-              console.log('   Solución: los usuarios deben abrir la app y pulsar "Activar Notificaciones Web".');
+              console.log('   Solución: los usuarios deben abrir la app y pulsar "Activar Notificaciones".');
               console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
               return;
             }
 
-            // ── [4/4] Enviar notificaciones ──────────────────────────────────
-            console.log('\n[4/4] Enviando notificaciones...');
-            const fcmInvalidos = new Set();
-            const wpInvalidos  = new Set();
+            // ── [3/3] Enviar notificaciones ──────────────────────────────────
+            console.log('\n[3/3] Enviando notificaciones...');
+            const wpInvalidos = new Set();
 
             for (const ev of eventos) {
               const titulo = 'Oriente Fraterno 148';
@@ -378,45 +304,28 @@ jobs:
 
               console.log(`\n  ✦ Evento: ${cuerpo}`);
               console.log(`  Tag: ${tag}`);
+              console.log(`  Enviando Web Push a ${wpDocs.length} suscripción(es)...`);
 
-              if (fcmDocs.length > 0) {
-                console.log(`  Enviando FCM a ${fcmDocs.length} dispositivo(s)...`);
-                for (const td of fcmDocs) {
-                  const r = await fcmSend(projectId, accessToken, td.token, titulo, cuerpo, tag);
-                  if (r.invalid) fcmInvalidos.add(td.docName);
-                }
-              }
-
-              if (wpDocs.length > 0) {
-                console.log(`  Enviando Web Push a ${wpDocs.length} suscripción(es)...`);
-                for (const sub of wpDocs) {
-                  const subscription = {
-                    endpoint: sub.endpoint,
-                    keys:     { p256dh: sub.p256dh, auth: sub.auth },
-                  };
-                  const r = await webPushSend(subscription, titulo, cuerpo, tag);
-                  if (r.invalid) wpInvalidos.add(sub.docName);
-                }
+              for (const sub of wpDocs) {
+                const subscription = {
+                  endpoint: sub.endpoint,
+                  keys:     { p256dh: sub.p256dh, auth: sub.auth },
+                };
+                const r = await webPushSend(subscription, titulo, cuerpo, appUrl, tag);
+                if (r.invalid) wpInvalidos.add(sub.docName);
               }
             }
 
-            if (fcmInvalidos.size > 0) {
-              console.log(`\nLimpiando ${fcmInvalidos.size} token(s) FCM inválido(s)...`);
-              for (const dn of fcmInvalidos) await firestoreDelete(accessToken, dn);
-            }
             if (wpInvalidos.size > 0) {
-              console.log(`\nLimpiando ${wpInvalidos.size} suscripción(es) Web Push inválida(s)...`);
+              console.log(`\nLimpiando ${wpInvalidos.size} suscripción(es) inválida(s)...`);
               for (const dn of wpInvalidos) await firestoreDelete(accessToken, dn);
             }
 
-            const fcmEnviados = fcmDocs.length - fcmInvalidos.size;
-            const wpEnviados  = wpDocs.length  - wpInvalidos.size;
+            const wpEnviados = wpDocs.length - wpInvalidos.size;
             console.log('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
             console.log('✅ Proceso completado.');
-            console.log(`   FCM enviados:     ${fcmEnviados} / ${fcmDocs.length}`);
-            console.log(`   WebPush enviados: ${wpEnviados}  / ${wpDocs.length}`);
-            console.log(`   Tokens FCM inválidos eliminados:    ${fcmInvalidos.size}`);
-            console.log(`   Suscripciones WP inválidas eliminadas: ${wpInvalidos.size}`);
+            console.log(`   WebPush enviados: ${wpEnviados} / ${wpDocs.length}`);
+            console.log(`   Suscripciones inválidas eliminadas: ${wpInvalidos.size}`);
             console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
           }
 
