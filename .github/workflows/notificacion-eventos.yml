@@ -185,7 +185,13 @@ jobs:
               return { invalid: false };
             } catch (err) {
               const invalid = err.statusCode === 404 || err.statusCode === 410;
-              console.log(`  WebPush [${err.statusCode || err.message}]: ${subscription.endpoint.substring(0, 60)}... → ${invalid ? 'suscripción inválida' : 'error temporal'}`);
+              console.log('  WebPush ERROR ---');
+              console.log('    statusCode :', err.statusCode);
+              console.log('    endpoint   :', subscription.endpoint.substring(0, 80) + '...');
+              console.log('    body       :', err.body || '(vacío)');
+              console.log('    headers    :', JSON.stringify(err.headers || {}));
+              console.log('    message    :', err.message || '(sin mensaje)');
+              console.log('  ---');
               return { invalid };
             }
           }
