@@ -243,9 +243,21 @@ jobs:
 
             const todosLosEventos = (eventosData.documents || []).map(doc => {
               const f = doc.fields || {};
+              // Normalizar fecha a formato MM-DD sin importar si viene como
+              // "MM-DD" o "YYYY-MM-DD" — ambos formatos existen en Firestore.
+              const fechaRaw = (f.fecha && f.fecha.stringValue) || '';
+              const parts    = fechaRaw.split('-');
+              let fechaNorm  = '';
+              if (parts.length === 2) {
+                // Formato MM-DD
+                fechaNorm = parts[0].padStart(2,'0') + '-' + parts[1].padStart(2,'0');
+              } else if (parts.length === 3) {
+                // Formato YYYY-MM-DD
+                fechaNorm = parts[1].padStart(2,'0') + '-' + parts[2].padStart(2,'0');
+              }
               return {
                 nombre: (f.nombre && f.nombre.stringValue) || '',
-                fecha:  (f.fecha  && f.fecha.stringValue)  || '',
+                fecha:  fechaNorm,
                 tipo:   (f.tipo   && f.tipo.stringValue)   || '',
               };
             }).filter(e => e.nombre && e.fecha && e.tipo);
