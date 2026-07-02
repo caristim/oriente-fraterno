@@ -37,7 +37,7 @@
 
   <!-- ── Lógica de Firebase + Notificaciones ──────────────────────────── -->
   <script>
-    const VAPID_PUBLIC_KEY = 'BB_vwSikxtprZRCwnSO34oHmB4HZw2CZsx3se-yefvLTBLnPU1B6jo5YpLYg_MhG_7wpppr4A-tqRo5jKQLTH2k';
+    const VAPID_PUBLIC_KEY = 'BM1SqlyjKhW45Y2JSBqDTYRT5QBV0yduJBtonc_QrlqM1DgaDmanz_w1R0Qj40ZuiG-rz4s4stIqBuYmciutG9Y';
 
     let db = null;
     try {
@@ -299,20 +299,23 @@
                 <div className="fade-in space-y-4">
                   {iosOld && (
                     <div className="bg-red-900/30 border border-red-500/40 rounded p-3">
-                      <p className="font-crimson text-red-300 text-sm">⚠️ Tu iOS ({iosVer}) no soporta notificaciones web. Actualiza a iOS 16.4+.</p>
+                      <p className="font-crimson text-red-300 text-sm">⚠️ La version de iOS ({iosVer}) no soporta notificaciones web. Es necesario actualizar a iOS 16.4 o superior.</p>
                     </div>
                   )}
                   <div className="flex gap-3 items-start">
                     <span className="bg-gold/20 text-gold w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold shrink-0 mt-0.5">1</span>
-                    <p className="font-crimson text-white/90 text-base leading-snug">Toca <span className="text-gold font-semibold">"Activar Notificaciones Web"</span> y acepta el permiso del navegador.</p>
+                    <p className="font-crimson text-white/90 text-base leading-snug">
+                      {ios
+                        ? <span>Abrir <span className="text-gold font-semibold">Safari</span>, tocar el icono Compartir y seleccionar <span className="text-gold font-semibold">Agregar a pantalla de inicio</span>. Luego abrir la app desde el icono instalado.</span>
+                        : <span>Instalar la app en la pantalla de inicio: tocar el menu de Chrome y seleccionar <span className="text-gold font-semibold">Agregar a pantalla de inicio</span>. Luego abrir la app desde el icono instalado.</span>
+                      }
+                    </p>
                   </div>
                   <div className="h-px bg-gold/15" />
                   <div className="flex gap-3 items-start">
                     <span className="bg-gold/20 text-gold w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold shrink-0 mt-0.5">2</span>
                     <p className="font-crimson text-white/90 text-base leading-snug">
-                      {ios
-                        ? 'En iOS instala la app primero: Compartir → Agregar al inicio.'
-                        : 'Instala la app en tu pantalla de inicio para garantizar notificaciones en segundo plano.'}
+                      Una vez abierta la app desde el icono instalado, tocar <span className="text-gold font-semibold">Activar Notificaciones Web</span> y aceptar el permiso.
                     </p>
                   </div>
                   <button onClick={() => setStep(2)} className="w-full py-3 mt-2 rounded font-cinzel text-xs tracking-widest uppercase bg-gold/10 border border-gold/30 text-gold font-bold">
@@ -325,20 +328,20 @@
                   <h3 className="font-cinzel text-gold text-xs tracking-widest uppercase text-center">Ajuste de Segundo Plano</h3>
                   {android ? (
                     <ul className="space-y-2 text-sm font-crimson text-white/90">
-                      <li className="flex gap-2"><span>•</span>Mantén presionado el ícono de la app.</li>
-                      <li className="flex gap-2"><span>•</span>Toca <span className="text-gold">Info de la aplicación ⓘ</span>.</li>
-                      <li className="flex gap-2"><span>•</span>Batería → elige <span className="text-gold">Sin Restricciones</span>.</li>
+                      <li className="flex gap-2"><span>•</span>Mantener presionado el icono de la app en la pantalla de inicio.</li>
+                      <li className="flex gap-2"><span>•</span>Seleccionar <span className="text-gold">Informacion de la aplicacion ⓘ</span>.</li>
+                      <li className="flex gap-2"><span>•</span>Ir a Bateria y elegir <span className="text-gold">Sin Restricciones</span>.</li>
                     </ul>
                   ) : (
                     <ul className="space-y-2 text-sm font-crimson text-white/90">
-                      <li className="flex gap-2"><span>•</span>Instala desde Safari: <span className="text-gold">Compartir → Agregar al inicio</span>.</li>
-                      <li className="flex gap-2"><span>•</span>Ajustes → Notificaciones → <span className="text-gold">Oriente Fraterno</span>.</li>
-                      <li className="flex gap-2"><span>•</span>Activa todas las notificaciones.</li>
+                      <li className="flex gap-2"><span>•</span>Ir a <span className="text-gold">Ajustes del iPhone → Notificaciones</span>.</li>
+                      <li className="flex gap-2"><span>•</span>Buscar <span className="text-gold">Oriente Fraterno</span> en la lista.</li>
+                      <li className="flex gap-2"><span>•</span>Activar todas las opciones de notificacion.</li>
                     </ul>
                   )}
                   <div className="h-px bg-gold/15" />
                   <button onClick={onClose} className="w-full py-3 rounded font-cinzel text-xs tracking-widest uppercase bg-gradient-to-r from-gold via-gold-light to-gold text-navy font-bold shadow-lg shadow-gold/20">
-                    ¡Entendido! ✦
+                    Entendido ✦
                   </button>
                 </div>
               )}
@@ -356,9 +359,7 @@
       const [mes, setMes]                 = useState('');
       const [dia, setDia]                 = useState('');
       const [tipo, setTipo]               = useState('');
-      const [notifOk, setNotifOk]         = useState(
-        typeof Notification !== 'undefined' && Notification.permission === 'granted'
-      );
+      const [notifOk, setNotifOk]         = useState(false);
       const [toast, setToast]             = useState({ msg:'', visible:false });
       const [loading, setLoading]         = useState(true);
       const [showWelcome, setShowWelcome] = useState(true);
@@ -369,6 +370,12 @@
         (async () => {
           const reg = await registerSW();
           if (!reg) return;
+          // Verificar si existe suscripcion WebPush activa real (no solo permiso del navegador)
+          try {
+            const sub = await reg.pushManager.getSubscription();
+            const granted = typeof Notification !== 'undefined' && Notification.permission === 'granted';
+            setNotifOk(!!(sub && granted));
+          } catch(_) { setNotifOk(false); }
           // Renovar al iniciar
           if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
             window._renovarRegistros(reg).catch(() => {});
@@ -478,7 +485,7 @@
               <button onClick={handleActivar}
                 className={'w-full flex items-center justify-center gap-2 py-2.5 px-4 rounded font-cinzel text-xs tracking-widest uppercase border transition-all ' + (notifOk ? 'border-gold/50 text-gold-light bg-gold/10' : 'border-gold/30 text-gold hover:bg-gold/10')}>
                 <Icon name={notifOk ? 'BellRing' : 'Bell'} size={15} />
-                {notifOk ? 'Notificaciones Activas ✦' : 'Activar Notificaciones Web'}
+                {notifOk ? 'Volver a registrar dispositivo ✦' : 'Activar Notificaciones Web'}
               </button>
             </Card>
 
