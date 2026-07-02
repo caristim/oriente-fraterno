@@ -6,7 +6,9 @@
   <title>Registro Eventos · Oriente Fraterno</title>
   <meta name="theme-color" content="#0f172a" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="apple-mobile-web-app-title" content="Oriente Fraterno" />
+  <link rel="apple-touch-icon" href="./apple-touch-icon.png" />
   <link rel="manifest" href="./manifest.json" />
 
   <!-- Tailwind CSS -->
@@ -281,8 +283,8 @@
     function WelcomeScreen({ onClose }) {
       const ios     = isIOS();
       const android = /Android/i.test(navigator.userAgent);
-      const iosVer  = (() => { const m = navigator.userAgent.match(/OS (\d+)_/); return m ? +m[1] : null; })();
-      const iosOld  = ios && iosVer !== null && iosVer < 16;
+      const iosVer  = (() => { const m = navigator.userAgent.match(/OS (\d+)_(\d+)/); return m ? { major: +m[1], minor: +m[2] } : null; })();
+      const iosOld  = ios && iosVer !== null && (iosVer.major < 16 || (iosVer.major === 16 && iosVer.minor < 4));
       const [step, setStep] = useState(1);
 
       return (
@@ -299,7 +301,7 @@
                 <div className="fade-in space-y-4">
                   {iosOld && (
                     <div className="bg-red-900/30 border border-red-500/40 rounded p-3">
-                      <p className="font-crimson text-red-300 text-sm">⚠️ La version de iOS ({iosVer}) no soporta notificaciones web. Es necesario actualizar a iOS 16.4 o superior.</p>
+                      <p className="font-crimson text-red-300 text-sm">⚠️ La version de iOS ({iosVer ? iosVer.major + '.' + iosVer.minor : ''}) no soporta notificaciones web. Es necesario actualizar a iOS 16.4 o superior.</p>
                     </div>
                   )}
                   <div className="flex gap-3 items-start">
