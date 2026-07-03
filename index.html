@@ -39,7 +39,7 @@
 
   <!-- ── Lógica de Firebase + Notificaciones ──────────────────────────── -->
   <script>
-    const VAPID_PUBLIC_KEY = 'BIrtqfJ3hWlKntqS1SwaKDxf4sFn5pHYfK-UxK9TvWdHfL-h_5Ebj0s4CMtElLeR_Rjd6mx1b_BhfqOmyokw44M';
+    const VAPID_PUBLIC_KEY = 'BO...'; // <-- REEMPLAZA CON TU CLAVE PÚBLICA ACTUAL
 
     let db = null;
     try {
@@ -54,19 +54,15 @@
       db = firebase.firestore();
     } catch(e) { console.error('[App] Firebase init error:', e.message); }
 
-    // ── Notificaciones: WebPush nativo puro (sin Firebase Cloud Messaging) ──
-    // Se unifica todo en pushManager.subscribe() + VAPID, igual en Android,
-    // Windows/Edge, iOS y Firefox. Esto evita depender del SW especial que
-    // exige el SDK de Firebase Messaging (firebase-messaging-sw.js), que no
-    // existía en este proyecto y por eso las notificaciones no llegaban con
-    // la app cerrada en Android/Chrome/Edge.
+    // ── Notificaciones: WebPush nativo puro ──────────────────────────────
     function isIOS() { return /iPhone|iPad|iPod/i.test(navigator.userAgent); }
+    function isAndroid() { return /Android/i.test(navigator.userAgent); }
+
     function urlBase64ToUint8Array(b64) {
       const pad  = '='.repeat((4 - b64.length % 4) % 4);
       const base = (b64 + pad).replace(/-/g,'+').replace(/_/g,'/');
       return Uint8Array.from(atob(base), c => c.charCodeAt(0));
     }
-    // SHA-1 via SubtleCrypto: produce 40 chars hex, colisiones prácticamente imposibles.
     async function hashEndpoint(ep) {
       const buf = await crypto.subtle.digest('SHA-1', new TextEncoder().encode(ep));
       return 'wp_' + Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2,'0')).join('');
@@ -158,7 +154,7 @@
     const { useState, useEffect, useCallback, useRef, useMemo } = React;
     const STORAGE_KEY = 'orienteFraterno_v2';
 
-    // ── SVG Icons inline (sin dependencia de lucide) ───────────────────────
+    // ── SVG Icons inline ──────────────────────────────────────────────────
     const SVG_ICONS = {
       Bell: '<path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/>',
       BellRing: '<path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/><line x1="2" y1="8" x2="2.01" y2="8"/><line x1="22" y1="8" x2="22.01" y2="8"/>',
@@ -279,12 +275,10 @@
       return <div className={'rounded-lg border gold-border bg-navy-mid/80 shadow-xl ring-1 ring-gold/5 ' + (className||'')}>{children}</div>;
     }
 
-    // ── Pantalla de bienvenida ────────────────────────────────────────────
+    // ── Pantalla de bienvenida (MEJORADA) ────────────────────────────────
     function WelcomeScreen({ onClose }) {
       const ios     = isIOS();
-      const android = /Android/i.test(navigator.userAgent);
-      const iosVer  = (() => { const m = navigator.userAgent.match(/OS (\d+)_(\d+)/); return m ? { major: +m[1], minor: +m[2] } : null; })();
-      const iosOld  = ios && iosVer !== null && (iosVer.major < 16 || (iosVer.major === 16 && iosVer.minor < 4));
+      const android = isAndroid();
       const [step, setStep] = useState(1);
 
       return (
@@ -292,56 +286,78 @@
           <div className="w-full max-w-sm flex flex-col items-center gap-6 py-8">
             <div className="text-center w-full">
               <div className="text-gold text-5xl mb-3">✦</div>
-              <h1 className="font-cinzel text-gold-light tracking-widest uppercase text-xl font-bold text-center w-full">Oriente Fraterno · 148</h1>
-              <p className="font-cinzel text-gold/50 tracking-widest uppercase text-xs mt-1 text-center">Configuración de Notificaciones</p>
+              <h1 className="font-cinzel text-gold-light tracking-widest uppercase text-xl font-bold">Oriente Fraterno · 148</h1>
+              <p className="font-cinzel text-gold/50 tracking-widest uppercase text-xs mt-1">Configuración de Notificaciones</p>
             </div>
 
             <Card className="w-full p-5 space-y-5">
               {step === 1 && (
                 <div className="fade-in space-y-4">
-                  {iosOld && (
-                    <div className="bg-red-900/30 border border-red-500/40 rounded p-3">
-                      <p className="font-crimson text-red-300 text-sm">⚠️ La version de iOS ({iosVer ? iosVer.major + '.' + iosVer.minor : ''}) no soporta notificaciones web. Es necesario actualizar a iOS 16.4 o superior.</p>
+                  {ios && (
+                    <div className="bg-blue-900/30 border border-blue-400/40 rounded p-3 flex items-start gap-2">
+                      <span className="text-xl">📱</span>
+                      <p className="font-crimson text-blue-200 text-sm leading-snug">
+                        <span className="font-bold text-white">Importante:</span> Abre la app <span className="font-semibold text-gold">desde el icono</span> de la pantalla de inicio, no desde Safari.
+                      </p>
+                    </div>
+                  )}
+                  {android && (
+                    <div className="bg-amber-900/30 border border-amber-500/40 rounded p-3 flex items-start gap-2">
+                      <span className="text-xl">🔋</span>
+                      <p className="font-crimson text-amber-200 text-sm leading-snug">
+                        <span className="font-bold text-white">Batería:</span> Desactiva las restricciones de energía para esta app en Ajustes → Batería.
+                      </p>
                     </div>
                   )}
                   <div className="flex gap-3 items-start">
                     <span className="bg-gold/20 text-gold w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold shrink-0 mt-0.5">1</span>
                     <p className="font-crimson text-white/90 text-base leading-snug">
                       {ios
-                        ? <span>Abrir <span className="text-gold font-semibold">Safari</span>, tocar el icono Compartir y seleccionar <span className="text-gold font-semibold">Agregar a pantalla de inicio</span>. Luego abrir la app desde el icono instalado.</span>
-                        : <span>Instalar la app en la pantalla de inicio: tocar el menu de Chrome y seleccionar <span className="text-gold font-semibold">Agregar a pantalla de inicio</span>. Luego abrir la app desde el icono instalado.</span>
+                        ? <span>Abrir <span className="text-gold font-semibold">Safari</span>, tocar Compartir y seleccionar <span className="text-gold font-semibold">Agregar a pantalla de inicio</span>.</span>
+                        : <span>Instalar la app: tocar el menú del navegador y seleccionar <span className="text-gold font-semibold">Agregar a pantalla de inicio</span>.</span>
                       }
                     </p>
                   </div>
-                  <div className="h-px bg-gold/15" />
                   <div className="flex gap-3 items-start">
                     <span className="bg-gold/20 text-gold w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold shrink-0 mt-0.5">2</span>
                     <p className="font-crimson text-white/90 text-base leading-snug">
-                      Una vez abierta la app desde el icono instalado, tocar <span className="text-gold font-semibold">Activar Notificaciones Web</span> y aceptar el permiso.
+                      Después de instalar, abre la app desde el icono y pulsa <span className="text-gold font-semibold">Activar Notificaciones Web</span>.
                     </p>
                   </div>
-                  <button onClick={() => setStep(2)} className="w-full py-3 mt-2 rounded font-cinzel text-xs tracking-widest uppercase bg-gold/10 border border-gold/30 text-gold font-bold">
-                    Siguiente ➔
-                  </button>
+                  <div className="flex gap-3 justify-between mt-2">
+                    <button onClick={() => setStep(2)} className="flex-1 py-2.5 rounded font-cinzel text-xs tracking-widest uppercase bg-gold/10 border border-gold/30 text-gold font-bold">
+                      Más ajustes ➔
+                    </button>
+                    <button onClick={onClose} className="flex-1 py-2.5 rounded font-cinzel text-xs tracking-widest uppercase bg-gold/20 border border-gold/40 text-gold font-bold">
+                      Entendido ✦
+                    </button>
+                  </div>
                 </div>
               )}
               {step === 2 && (
                 <div className="fade-in space-y-4">
-                  <h3 className="font-cinzel text-gold text-xs tracking-widest uppercase text-center">Ajuste de Segundo Plano</h3>
-                  {android ? (
-                    <ul className="space-y-2 text-sm font-crimson text-white/90">
-                      <li className="flex gap-2"><span>•</span>Mantener presionado el icono de la app en la pantalla de inicio.</li>
-                      <li className="flex gap-2"><span>•</span>Seleccionar <span className="text-gold">Informacion de la aplicacion ⓘ</span>.</li>
-                      <li className="flex gap-2"><span>•</span>Ir a Bateria y elegir <span className="text-gold">Sin Restricciones</span>.</li>
-                    </ul>
-                  ) : (
-                    <ul className="space-y-2 text-sm font-crimson text-white/90">
-                      <li className="flex gap-2"><span>•</span>Ir a <span className="text-gold">Ajustes del iPhone → Notificaciones</span>.</li>
-                      <li className="flex gap-2"><span>•</span>Buscar <span className="text-gold">Oriente Fraterno</span> en la lista.</li>
-                      <li className="flex gap-2"><span>•</span>Activar todas las opciones de notificacion.</li>
-                    </ul>
-                  )}
-                  <div className="h-px bg-gold/15" />
+                  <h3 className="font-cinzel text-gold text-xs tracking-widest uppercase text-center">Ajustes adicionales</h3>
+                  <ul className="space-y-2 text-sm font-crimson text-white/90">
+                    {android ? (
+                      <>
+                        <li className="flex gap-2 items-start"><span>•</span>Mantén presionado el icono de la app → <span className="text-gold">Información</span>.</li>
+                        <li className="flex gap-2 items-start"><span>•</span>Ve a Batería y elige <span className="text-gold">Sin Restricciones</span>.</li>
+                      </>
+                    ) : ios ? (
+                      <>
+                        <li className="flex gap-2 items-start"><span>•</span>Ajustes → Notificaciones → busca <span className="text-gold">Oriente Fraterno</span>.</li>
+                        <li className="flex gap-2 items-start"><span>•</span>Activa todas las opciones.</li>
+                      </>
+                    ) : (
+                      <>
+                        <li className="flex gap-2 items-start"><span>•</span>Permite notificaciones en el navegador (campana en la barra).</li>
+                        <li className="flex gap-2 items-start"><span>•</span>Si usas Windows, revisa Configuración → Notificaciones.</li>
+                      </>
+                    )}
+                    <li className="flex gap-2 items-start text-gold/60 text-xs mt-1">
+                      <span>🔄</span> Si después de actualizar fallan, reinstala la app desde la pantalla de inicio.
+                    </li>
+                  </ul>
                   <button onClick={onClose} className="w-full py-3 rounded font-cinzel text-xs tracking-widest uppercase bg-gradient-to-r from-gold via-gold-light to-gold text-navy font-bold shadow-lg shadow-gold/20">
                     Entendido ✦
                   </button>
@@ -372,17 +388,14 @@
         (async () => {
           const reg = await registerSW();
           if (!reg) return;
-          // Verificar si existe suscripcion WebPush activa real (no solo permiso del navegador)
           try {
             const sub = await reg.pushManager.getSubscription();
             const granted = typeof Notification !== 'undefined' && Notification.permission === 'granted';
             setNotifOk(!!(sub && granted));
           } catch(_) { setNotifOk(false); }
-          // Renovar al iniciar
           if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
             window._renovarRegistros(reg).catch(() => {});
           }
-          // Renovar cada 24h para mantener tokens vivos
           const interval = setInterval(() => {
             window._renovarRegistros(reg).catch(() => {});
           }, 24 * 60 * 60 * 1000);
@@ -413,8 +426,6 @@
             setEvents(evs);
             saveEventsLocal(evs);
             setLoading(false);
-            // Siempre sincronizar eventos al SW (SCHEDULE_EVENTS solo escribe en IndexedDB,
-            // no muestra notificaciones, por lo que no requiere permiso de Notification).
             syncEventsToSW(evs);
           },
           err => { console.error('[App] Firestore error:', err); setLoading(false); }
