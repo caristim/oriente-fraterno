@@ -3,8 +3,13 @@ name: Notificacion Eventos 9AM
 on:
   schedule:
     # Uruguay es UTC-3 TODO EL AÑO (abolió el horario de verano en 2015).
-    # 09:00 UYT = 12:00 UTC.
-    - cron: '0 12 * * *'   # 09:00 Uruguay (disparo principal)
+    # 09:15 UYT = 12:15 UTC.
+    # CORRECCIÓN: se movió de las 09:00 (minuto redondo) a las 09:15
+    # (minuto no redondo) porque los disparos de GitHub Actions programados
+    # justo en punto de la hora (":00") acumulan más cola global y sufren
+    # más demora. Un minuto no redondo reduce la probabilidad de retraso,
+    # aunque GitHub no garantiza puntualidad exacta en jobs de 'schedule'.
+    - cron: '15 12 * * *'   # 09:15 Uruguay (disparo principal)
   workflow_dispatch:         # Ejecución manual para pruebas
 
 jobs:
@@ -243,21 +248,9 @@ jobs:
 
             const todosLosEventos = (eventosData.documents || []).map(doc => {
               const f = doc.fields || {};
-              // Normalizar fecha a formato MM-DD sin importar si viene como
-              // "MM-DD" o "YYYY-MM-DD" — ambos formatos existen en Firestore.
-              const fechaRaw = (f.fecha && f.fecha.stringValue) || '';
-              const parts    = fechaRaw.split('-');
-              let fechaNorm  = '';
-              if (parts.length === 2) {
-                // Formato MM-DD
-                fechaNorm = parts[0].padStart(2,'0') + '-' + parts[1].padStart(2,'0');
-              } else if (parts.length === 3) {
-                // Formato YYYY-MM-DD
-                fechaNorm = parts[1].padStart(2,'0') + '-' + parts[2].padStart(2,'0');
-              }
               return {
                 nombre: (f.nombre && f.nombre.stringValue) || '',
-                fecha:  fechaNorm,
+                fecha:  (f.fecha  && f.fecha.stringValue)  || '',
                 tipo:   (f.tipo   && f.tipo.stringValue)   || '',
               };
             }).filter(e => e.nombre && e.fecha && e.tipo);
