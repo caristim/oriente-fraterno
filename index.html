@@ -6,9 +6,7 @@
   <title>Registro Eventos · Oriente Fraterno</title>
   <meta name="theme-color" content="#0f172a" />
   <meta name="apple-mobile-web-app-capable" content="yes" />
-  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
   <meta name="apple-mobile-web-app-title" content="Oriente Fraterno" />
-  <link rel="apple-touch-icon" href="./apple-touch-icon.png" />
   <link rel="manifest" href="./manifest.json" />
 
   <!-- Tailwind CSS -->
@@ -39,7 +37,7 @@
 
   <!-- ── Lógica de Firebase + Notificaciones ──────────────────────────── -->
   <script>
-    const VAPID_PUBLIC_KEY = 'BIrtqfJ3hWlKntqS1SwaKDxf4sFn5pHYfK-UxK9TvWdHfL-h_5Ebj0s4CMtElLeR_Rjd6mx1b_BhfqOmyokw44M';
+    const VAPID_PUBLIC_KEY = 'BM1SqlyjKhW45Y2JSBqDTYRT5QBV0yduJBtonc_QrlqM1DgaDmanz_w1R0Qj40ZuiG-rz4s4stIqBuYmciutG9Y';
 
     let db = null;
     try {
@@ -54,10 +52,8 @@
       db = firebase.firestore();
     } catch(e) { console.error('[App] Firebase init error:', e.message); }
 
-    // ── Notificaciones: WebPush nativo puro ──────────────────────────────
+    // ── Notificaciones: WebPush nativo puro (sin Firebase Cloud Messaging) ──
     function isIOS() { return /iPhone|iPad|iPod/i.test(navigator.userAgent); }
-    function isAndroid() { return /Android/i.test(navigator.userAgent); }
-
     function urlBase64ToUint8Array(b64) {
       const pad  = '='.repeat((4 - b64.length % 4) % 4);
       const base = (b64 + pad).replace(/-/g,'+').replace(/_/g,'/');
@@ -154,7 +150,7 @@
     const { useState, useEffect, useCallback, useRef, useMemo } = React;
     const STORAGE_KEY = 'orienteFraterno_v2';
 
-    // ── SVG Icons inline ──────────────────────────────────────────────────
+    // ── SVG Icons inline (sin dependencia de lucide) ───────────────────────
     const SVG_ICONS = {
       Bell: '<path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/>',
       BellRing: '<path d="M18 8A6 6 0 0 0 6 8c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.73 21a2 2 0 0 1-3.46 0"/><line x1="2" y1="8" x2="2.01" y2="8"/><line x1="22" y1="8" x2="22.01" y2="8"/>',
@@ -275,10 +271,12 @@
       return <div className={'rounded-lg border gold-border bg-navy-mid/80 shadow-xl ring-1 ring-gold/5 ' + (className||'')}>{children}</div>;
     }
 
-    // ── Pantalla de bienvenida (MEJORADA) ────────────────────────────────
+    // ── Pantalla de bienvenida ────────────────────────────────────────────
     function WelcomeScreen({ onClose }) {
       const ios     = isIOS();
-      const android = isAndroid();
+      const android = /Android/i.test(navigator.userAgent);
+      const iosVer  = (() => { const m = navigator.userAgent.match(/OS (\d+)_/); return m ? +m[1] : null; })();
+      const iosOld  = ios && iosVer !== null && iosVer < 16;
       const [step, setStep] = useState(1);
 
       return (
@@ -286,78 +284,56 @@
           <div className="w-full max-w-sm flex flex-col items-center gap-6 py-8">
             <div className="text-center w-full">
               <div className="text-gold text-5xl mb-3">✦</div>
-              <h1 className="font-cinzel text-gold-light tracking-widest uppercase text-xl font-bold">Oriente Fraterno · 148</h1>
-              <p className="font-cinzel text-gold/50 tracking-widest uppercase text-xs mt-1">Configuración de Notificaciones</p>
+              <h1 className="font-cinzel text-gold-light tracking-widest uppercase text-xl font-bold text-center w-full">Oriente Fraterno · 148</h1>
+              <p className="font-cinzel text-gold/50 tracking-widest uppercase text-xs mt-1 text-center">Configuración de Notificaciones</p>
             </div>
 
             <Card className="w-full p-5 space-y-5">
               {step === 1 && (
                 <div className="fade-in space-y-4">
-                  {ios && (
-                    <div className="bg-blue-900/30 border border-blue-400/40 rounded p-3 flex items-start gap-2">
-                      <span className="text-xl">📱</span>
-                      <p className="font-crimson text-blue-200 text-sm leading-snug">
-                        <span className="font-bold text-white">Importante:</span> Abre la app <span className="font-semibold text-gold">desde el icono</span> de la pantalla de inicio, no desde Safari.
-                      </p>
-                    </div>
-                  )}
-                  {android && (
-                    <div className="bg-amber-900/30 border border-amber-500/40 rounded p-3 flex items-start gap-2">
-                      <span className="text-xl">🔋</span>
-                      <p className="font-crimson text-amber-200 text-sm leading-snug">
-                        <span className="font-bold text-white">Batería:</span> Desactiva las restricciones de energía para esta app en Ajustes → Batería.
-                      </p>
+                  {iosOld && (
+                    <div className="bg-red-900/30 border border-red-500/40 rounded p-3">
+                      <p className="font-crimson text-red-300 text-sm">⚠️ La version de iOS ({iosVer}) no soporta notificaciones web. Es necesario actualizar a iOS 16.4 o superior.</p>
                     </div>
                   )}
                   <div className="flex gap-3 items-start">
                     <span className="bg-gold/20 text-gold w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold shrink-0 mt-0.5">1</span>
                     <p className="font-crimson text-white/90 text-base leading-snug">
                       {ios
-                        ? <span>Abrir <span className="text-gold font-semibold">Safari</span>, tocar Compartir y seleccionar <span className="text-gold font-semibold">Agregar a pantalla de inicio</span>.</span>
-                        : <span>Instalar la app: tocar el menú del navegador y seleccionar <span className="text-gold font-semibold">Agregar a pantalla de inicio</span>.</span>
+                        ? <span>Abrir <span className="text-gold font-semibold">Safari</span>, tocar el icono Compartir y seleccionar <span className="text-gold font-semibold">Agregar a pantalla de inicio</span>. Luego abrir la app desde el icono instalado.</span>
+                        : <span>Instalar la app en la pantalla de inicio: tocar el menu de Chrome y seleccionar <span className="text-gold font-semibold">Agregar a pantalla de inicio</span>. Luego abrir la app desde el icono instalado.</span>
                       }
                     </p>
                   </div>
+                  <div className="h-px bg-gold/15" />
                   <div className="flex gap-3 items-start">
                     <span className="bg-gold/20 text-gold w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold shrink-0 mt-0.5">2</span>
                     <p className="font-crimson text-white/90 text-base leading-snug">
-                      Después de instalar, abre la app desde el icono y pulsa <span className="text-gold font-semibold">Activar Notificaciones Web</span>.
+                      Una vez abierta la app desde el icono instalado, tocar <span className="text-gold font-semibold">Activar Notificaciones Web</span> y aceptar el permiso.
                     </p>
                   </div>
-                  <div className="flex gap-3 justify-between mt-2">
-                    <button onClick={() => setStep(2)} className="flex-1 py-2.5 rounded font-cinzel text-xs tracking-widest uppercase bg-gold/10 border border-gold/30 text-gold font-bold">
-                      Más ajustes ➔
-                    </button>
-                    <button onClick={onClose} className="flex-1 py-2.5 rounded font-cinzel text-xs tracking-widest uppercase bg-gold/20 border border-gold/40 text-gold font-bold">
-                      Entendido ✦
-                    </button>
-                  </div>
+                  <button onClick={() => setStep(2)} className="w-full py-3 mt-2 rounded font-cinzel text-xs tracking-widest uppercase bg-gold/10 border border-gold/30 text-gold font-bold">
+                    Siguiente ➔
+                  </button>
                 </div>
               )}
               {step === 2 && (
                 <div className="fade-in space-y-4">
-                  <h3 className="font-cinzel text-gold text-xs tracking-widest uppercase text-center">Ajustes adicionales</h3>
-                  <ul className="space-y-2 text-sm font-crimson text-white/90">
-                    {android ? (
-                      <>
-                        <li className="flex gap-2 items-start"><span>•</span>Mantén presionado el icono de la app → <span className="text-gold">Información</span>.</li>
-                        <li className="flex gap-2 items-start"><span>•</span>Ve a Batería y elige <span className="text-gold">Sin Restricciones</span>.</li>
-                      </>
-                    ) : ios ? (
-                      <>
-                        <li className="flex gap-2 items-start"><span>•</span>Ajustes → Notificaciones → busca <span className="text-gold">Oriente Fraterno</span>.</li>
-                        <li className="flex gap-2 items-start"><span>•</span>Activa todas las opciones.</li>
-                      </>
-                    ) : (
-                      <>
-                        <li className="flex gap-2 items-start"><span>•</span>Permite notificaciones en el navegador (campana en la barra).</li>
-                        <li className="flex gap-2 items-start"><span>•</span>Si usas Windows, revisa Configuración → Notificaciones.</li>
-                      </>
-                    )}
-                    <li className="flex gap-2 items-start text-gold/60 text-xs mt-1">
-                      <span>🔄</span> Si después de actualizar fallan, reinstala la app desde la pantalla de inicio.
-                    </li>
-                  </ul>
+                  <h3 className="font-cinzel text-gold text-xs tracking-widest uppercase text-center">Ajuste de Segundo Plano</h3>
+                  {android ? (
+                    <ul className="space-y-2 text-sm font-crimson text-white/90">
+                      <li className="flex gap-2"><span>•</span>Mantener presionado el icono de la app en la pantalla de inicio.</li>
+                      <li className="flex gap-2"><span>•</span>Seleccionar <span className="text-gold">Informacion de la aplicacion ⓘ</span>.</li>
+                      <li className="flex gap-2"><span>•</span>Ir a Bateria y elegir <span className="text-gold">Sin Restricciones</span>.</li>
+                    </ul>
+                  ) : (
+                    <ul className="space-y-2 text-sm font-crimson text-white/90">
+                      <li className="flex gap-2"><span>•</span>Ir a <span className="text-gold">Ajustes del iPhone → Notificaciones</span>.</li>
+                      <li className="flex gap-2"><span>•</span>Buscar <span className="text-gold">Oriente Fraterno</span> en la lista.</li>
+                      <li className="flex gap-2"><span>•</span>Activar todas las opciones de notificacion.</li>
+                    </ul>
+                  )}
+                  <div className="h-px bg-gold/15" />
                   <button onClick={onClose} className="w-full py-3 rounded font-cinzel text-xs tracking-widest uppercase bg-gradient-to-r from-gold via-gold-light to-gold text-navy font-bold shadow-lg shadow-gold/20">
                     Entendido ✦
                   </button>
@@ -382,6 +358,9 @@
       const [loading, setLoading]         = useState(true);
       const [showWelcome, setShowWelcome] = useState(true);
       const toastRef                      = useRef(null);
+
+      // --- ESTADO PARA EL MODAL DE ELIMINACIÓN ---
+      const [deleteTarget, setDeleteTarget] = useState(null);
 
       // Registrar SW al montar
       useEffect(() => {
@@ -453,9 +432,25 @@
         showToast('Evento registrado ✦');
       }
 
-      async function handleDelete(ev) {
-        await deleteEventFromFirebase(ev);
-        showToast('Evento eliminado');
+      // --- ELIMINACIÓN CON CONFIRMACIÓN (MODAL) ---
+      // Función que abre el modal
+      function handleDeleteClick(ev) {
+        setDeleteTarget(ev);
+      }
+
+      // Función que confirma la eliminación
+      async function handleConfirmDelete() {
+        if (!deleteTarget) return;
+        // Guardamos una copia para mostrar en el toast después de limpiar el estado
+        const nombreEliminado = deleteTarget.nombre;
+        await deleteEventFromFirebase(deleteTarget);
+        setDeleteTarget(null);
+        showToast(`Evento de ${nombreEliminado} eliminado`);
+      }
+
+      // Función que cancela
+      function handleCancelDelete() {
+        setDeleteTarget(null);
       }
 
       async function handleActivar() {
@@ -555,7 +550,8 @@
                             <p className="text-gold text-xs uppercase">{ev.tipo} · {formatDate(ev.fecha)}</p>
                             <p className="text-white/40 text-xs">{days === 0 ? 'HOY ✦' : 'En ' + days + ' días'}</p>
                           </div>
-                          <button onClick={() => handleDelete(ev)} className="p-1.5 text-red-500/60 hover:text-red-400 shrink-0">
+                          {/* Botón de eliminar que abre el modal */}
+                          <button onClick={() => handleDeleteClick(ev)} className="p-1.5 text-red-500/60 hover:text-red-400 shrink-0">
                             <Icon name="Trash2" size={14} />
                           </button>
                         </div>
@@ -572,6 +568,30 @@
           </footer>
 
           <Toast message={toast.msg} visible={toast.visible} />
+
+          {/* ── MODAL DE CONFIRMACIÓN DE ELIMINACIÓN ── */}
+          {deleteTarget && (
+            <div className="fixed inset-0 z-50 bg-black/70 backdrop-blur-sm flex items-center justify-center p-4" onClick={handleCancelDelete}>
+              <div className="bg-navy-mid border gold-border rounded-lg p-6 max-w-sm w-full shadow-2xl fade-in" onClick={e => e.stopPropagation()}>
+                <h3 className="font-cinzel text-gold text-sm tracking-widest uppercase text-center">Confirmar eliminación</h3>
+                <div className="h-px bg-gold/20 my-3" />
+                <p className="text-white/90 text-center font-crimson text-lg">
+                  ¿Eliminar evento de <span className="text-gold font-bold">{deleteTarget.nombre}</span>?
+                </p>
+                <p className="text-white/40 text-xs text-center mt-1">Esta acción no se puede deshacer.</p>
+                <div className="flex gap-3 mt-6">
+                  <button onClick={handleCancelDelete}
+                    className="flex-1 py-2.5 rounded font-cinzel text-xs tracking-widest uppercase border border-gold/30 text-gold hover:bg-gold/10 transition">
+                    Cancelar
+                  </button>
+                  <button onClick={handleConfirmDelete}
+                    className="flex-1 py-2.5 rounded font-cinzel text-xs tracking-widest uppercase bg-red-900/40 border border-red-500/50 text-red-300 hover:bg-red-900/60 transition font-bold">
+                    Confirmar eliminación
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
         </div>
       );
     }

@@ -1,5 +1,23 @@
-// Oriente Fraterno 148 — Service Worker v25.0
-// CORRECCIÓN v25.0:
+// Oriente Fraterno 148 — Service Worker v26.0
+// CORRECCIÓN v26.0:
+//   - Se actualiza SW_VERSION y CACHE_NAME (v25.0 → v26.0) ÚNICAMENTE para
+//     forzar que el navegador detecte un Service Worker nuevo (comparación
+//     byte a byte) y dispare el evento 'install', regenerando la caché del
+//     app shell (index.html, manifest.json, íconos) en los celulares que ya
+//     tienen la app instalada. Esto es necesario porque el fetch handler
+//     usa estrategia "cache-first": sin este bump de versión, un cambio en
+//     index.html (ej. el modal de confirmación de eliminación) NO llegaría
+//     a los dispositivos ya instalados, aunque el archivo esté actualizado
+//     en GitHub Pages.
+//   - Este cambio NO afecta la suscripción WebPush (PushSubscription), que
+//     vive a nivel de navegador/SO atada al origen + scope, ni el IndexedDB
+//     ('of_sw', con 'fired' y 'events'), que es un almacén completamente
+//     separado de Cache Storage. Las notificaciones con la app cerrada
+//     siguen funcionando exactamente igual, sin necesidad de que el usuario
+//     desinstale, limpie caché ni vuelva a activar notificaciones.
+//   - No hay cambios funcionales en el evento 'push', 'checkAndNotify()',
+//     ni en ningún otro mecanismo de notificación respecto de v25.0.
+// CORRECCIÓN v25.0 (se mantiene):
 //   - Migración a WebPush nativo puro en todas las plataformas (Android,
 //     Windows/Edge, iOS, Firefox). Se eliminó la dependencia de Firebase
 //     Cloud Messaging (FCM) en el cliente y en el workflow de GitHub Actions,
@@ -20,14 +38,14 @@
 //     el tag guardado por el push externo y evita la doble notificación.
 //   - Se elimina markFiredToday() — ya no es necesaria.
 
-const SW_VERSION    = 'of-sw-v25.0';
+const SW_VERSION    = 'of-sw-v26.0';
 const DB_NAME       = 'of_sw';
 const APP_ROOT      = 'https://caristim.github.io/oriente-fraterno/';
 const APP_URL       = 'https://caristim.github.io/oriente-fraterno/';
 const ICON_192      = 'https://caristim.github.io/oriente-fraterno/icon-192.png';
 const BADGE_URL     = 'https://caristim.github.io/oriente-fraterno/icon-192.png';
 
-const CACHE_NAME    = 'of-cache-v25.0';
+const CACHE_NAME    = 'of-cache-v26.0';
 const PRECACHE_URLS = [
   APP_ROOT,
   APP_ROOT + 'index.html',
