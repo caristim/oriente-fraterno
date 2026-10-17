@@ -2,18 +2,42 @@ name: Notificacion Eventos 9AM
 
 on:
   schedule:
-    # Uruguay es UTC-3 TODO EL AÑO (abolió el horario de verano en 2015).
-    # 09:15 UYT = 12:15 UTC.
-    # CORRECCIÓN: se movió de las 09:00 (minuto redondo) a las 09:15
-    # (minuto no redondo) porque los disparos de GitHub Actions programados
-    # justo en punto de la hora (":00") acumulan más cola global y sufren
-    # más demora. Un minuto no redondo reduce la probabilidad de retraso,
-    # aunque GitHub no garantiza puntualidad exacta en jobs de 'schedule'.
-    - cron: '15 12 * * *'   # 09:15 Uruguay (disparo principal)
+    # Uruguay es UTC-3 TODO EL AÑO. 09:00 UYT = 12:00 UTC.
+    # v26: NUNCA usar el minuto 0: GitHub descarta o retrasa muchísimo los
+    # cron de ':00' por sobrecarga. Se usan 3 disparos escalonados; el
+    # script deduplica (Firestore: notificaciones_enviadas/AAAA-MM-DD) y
+    # solo el primero que funcione envía.
+    - cron: '17 12 * * *'   # 09:17 Uruguay (principal)
+    - cron: '47 12 * * *'   # 09:47 Uruguay (respaldo 1)
+    - cron: '23 13 * * *'   # 10:23 Uruguay (respaldo 2)
+    - cron: '11 6 * * 1'    # lunes: mantiene el workflow activo (keepalive)
   workflow_dispatch:         # Ejecución manual para pruebas
 
+permissions:
+  contents: read
+  actions: write             # necesario para el keepalive
+
 jobs:
+  # ── KEEPALIVE ────────────────────────────────────────────────────────
+  # GitHub DESACTIVA automáticamente los workflows programados de un
+  # repositorio público tras 60 días sin actividad (commits, etc.).
+  # Esa es la causa más probable de "dejó de notificar de golpe".
+  # Re-habilitar el workflow vía API reinicia ese contador de 60 días.
+  keepalive:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Reiniciar contador de inactividad
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api -X PUT "repos/${{ github.repository }}/actions/workflows/notificacion-eventos.yml/enable" \
+            && echo "Workflow re-habilitado (contador de 60 días reiniciado)" \
+            || echo "No se pudo re-habilitar (no es fatal)"
+
   enviar-notificacion:
+    # El cron del lunes 06:11 UTC es solo keepalive: no debe enviar nada.
+    if: github.event_name == 'workflow_dispatch' || github.event.schedule != '11 6 * * 1'
     runs-on: ubuntu-latest
     timeout-minutes: 10
 
@@ -187,7 +211,7 @@ jobs:
                 urgency: 'high',
               });
               console.log('  WebPush ✓ OK: ' + subscription.endpoint.substring(0, 60) + '...');
-              return { invalid: false };
+              return { invalid: false, ok: true };
             } catch (err) {
               const invalid = err.statusCode === 404 || err.statusCode === 410;
               console.log('  WebPush ERROR ---');
@@ -196,9 +220,50 @@ jobs:
               console.log('    body       :', err.body || '(vacío)');
               console.log('    headers    :', JSON.stringify(err.headers || {}));
               console.log('    message    :', err.message || '(sin mensaje)');
+              if (err.statusCode === 401 || err.statusCode === 403) {
+                console.log('    ⚠️ 401/403: la suscripción se creó con OTRA clave VAPID o la clave');
+                console.log('       privada/subject de los Secrets no coincide con la pública de index.html.');
+              }
               console.log('  ---');
-              return { invalid };
+              return { invalid, ok: false };
             }
+          }
+
+          // ── Deduplicación entre los 3 disparos diarios (v26) ────────────────
+          function firestoreRequest(accessToken, method, path, bodyObj) {
+            return new Promise((resolve, reject) => {
+              const body = bodyObj ? JSON.stringify(bodyObj) : null;
+              const req = https.request({
+                hostname: 'firestore.googleapis.com',
+                path, method,
+                headers: Object.assign(
+                  { 'Authorization': 'Bearer ' + accessToken },
+                  body ? { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) } : {}
+                ),
+              }, res => {
+                let d = '';
+                res.on('data', c => d += c);
+                res.on('end', () => resolve({ status: res.statusCode, body: d }));
+              });
+              req.on('error', reject);
+              if (body) req.write(body);
+              req.end();
+            });
+          }
+          async function yaEnviadoHoy(projectId, accessToken, fechaCompleta) {
+            const r = await firestoreRequest(accessToken, 'GET',
+              '/v1/projects/' + projectId + '/databases/(default)/documents/notificaciones_enviadas/' + fechaCompleta);
+            return r.status === 200;
+          }
+          async function marcarEnviadoHoy(projectId, accessToken, fechaCompleta, enviados, total) {
+            const r = await firestoreRequest(accessToken, 'POST',
+              '/v1/projects/' + projectId + '/databases/(default)/documents/notificaciones_enviadas?documentId=' + fechaCompleta,
+              { fields: {
+                  enviadoEn: { stringValue: new Date().toISOString() },
+                  enviados:  { integerValue: String(enviados) },
+                  total:     { integerValue: String(total) },
+              } });
+            if (r.status !== 200 && r.status !== 409) console.warn('  No se pudo marcar envío (status ' + r.status + '): ' + r.body.substring(0, 200));
           }
 
           // ── MAIN ─────────────────────────────────────────────────────────────
@@ -215,6 +280,7 @@ jobs:
             const mes     = String(uyDate.getMonth() + 1).padStart(2, '0');
             const dia     = String(uyDate.getDate()).padStart(2, '0');
             const fechaHoy = mes + '-' + dia;  // Formato MM-DD (igual que Firestore)
+            const fechaCompleta = uyDate.getFullYear() + '-' + fechaHoy;  // AAAA-MM-DD (clave de dedupe)
             const projectId = process.env.FIREBASE_PROJECT_ID;
             const appUrl = 'https://caristim.github.io/oriente-fraterno/';
 
@@ -248,9 +314,21 @@ jobs:
 
             const todosLosEventos = (eventosData.documents || []).map(doc => {
               const f = doc.fields || {};
+              // Normalizar fecha a formato MM-DD sin importar si viene como
+              // "MM-DD" o "YYYY-MM-DD" — ambos formatos existen en Firestore.
+              const fechaRaw = (f.fecha && f.fecha.stringValue) || '';
+              const parts    = fechaRaw.split('-');
+              let fechaNorm  = '';
+              if (parts.length === 2) {
+                // Formato MM-DD
+                fechaNorm = parts[0].padStart(2,'0') + '-' + parts[1].padStart(2,'0');
+              } else if (parts.length === 3) {
+                // Formato YYYY-MM-DD
+                fechaNorm = parts[1].padStart(2,'0') + '-' + parts[2].padStart(2,'0');
+              }
               return {
                 nombre: (f.nombre && f.nombre.stringValue) || '',
-                fecha:  (f.fecha  && f.fecha.stringValue)  || '',
+                fecha:  fechaNorm,
                 tipo:   (f.tipo   && f.tipo.stringValue)   || '',
               };
             }).filter(e => e.nombre && e.fecha && e.tipo);
@@ -280,6 +358,11 @@ jobs:
 
             console.log('  Eventos para hoy:', eventos.map(e => `${e.nombre} (${e.tipo})`).join(', '));
 
+            if (!ES_MANUAL && await yaEnviadoHoy(projectId, accessToken, fechaCompleta)) {
+              console.log('\n✔ Las notificaciones de hoy (' + fechaCompleta + ') ya fueron enviadas por un disparo anterior. Nada que hacer.');
+              return;
+            }
+
             // ── [2/3] Leer suscripciones WebPush (todas las plataformas) ─────
             console.log('\n[2/3] Leyendo suscripciones Web Push (Android/Windows/iOS/Firefox)...');
             const wpData = await firestoreGetAll(projectId, accessToken, 'webpush_subscriptions');
@@ -305,6 +388,7 @@ jobs:
             // ── [3/3] Enviar notificaciones ──────────────────────────────────
             console.log('\n[3/3] Enviando notificaciones...');
             const wpInvalidos = new Set();
+            let okCount = 0;
 
             for (const ev of eventos) {
               const titulo = 'Oriente Fraterno 148';
@@ -324,6 +408,7 @@ jobs:
                 };
                 const r = await webPushSend(subscription, titulo, cuerpo, appUrl, tag);
                 if (r.invalid) wpInvalidos.add(sub.docName);
+                if (r.ok) okCount++;
               }
             }
 
@@ -332,12 +417,19 @@ jobs:
               for (const dn of wpInvalidos) await firestoreDelete(accessToken, dn);
             }
 
-            const wpEnviados = wpDocs.length - wpInvalidos.size;
+            const wpEnviados = okCount;
+            if (okCount > 0 && !ES_MANUAL) await marcarEnviadoHoy(projectId, accessToken, fechaCompleta, okCount, wpDocs.length * eventos.length);
             console.log('\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
             console.log('✅ Proceso completado.');
             console.log(`   WebPush enviados: ${wpEnviados} / ${wpDocs.length}`);
             console.log(`   Suscripciones inválidas eliminadas: ${wpInvalidos.size}`);
             console.log('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━');
+            // v26: si NO se entregó nada, el job falla (GitHub te manda un mail)
+            // y el siguiente disparo de respaldo lo reintenta.
+            if (okCount === 0) {
+              console.error('❌ Ninguna notificación fue aceptada por los servidores push.');
+              process.exit(1);
+            }
           }
 
           main().catch(e => {
