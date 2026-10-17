@@ -1,23 +1,15 @@
 // Oriente Fraterno 148 — Service Worker v26.0
-// CORRECCIÓN v26.0:
-//   - Se actualiza SW_VERSION y CACHE_NAME (v25.0 → v26.0) ÚNICAMENTE para
-//     forzar que el navegador detecte un Service Worker nuevo (comparación
-//     byte a byte) y dispare el evento 'install', regenerando la caché del
-//     app shell (index.html, manifest.json, íconos) en los celulares que ya
-//     tienen la app instalada. Esto es necesario porque el fetch handler
-//     usa estrategia "cache-first": sin este bump de versión, un cambio en
-//     index.html (ej. el modal de confirmación de eliminación) NO llegaría
-//     a los dispositivos ya instalados, aunque el archivo esté actualizado
-//     en GitHub Pages.
-//   - Este cambio NO afecta la suscripción WebPush (PushSubscription), que
-//     vive a nivel de navegador/SO atada al origen + scope, ni el IndexedDB
-//     ('of_sw', con 'fired' y 'events'), que es un almacén completamente
-//     separado de Cache Storage. Las notificaciones con la app cerrada
-//     siguen funcionando exactamente igual, sin necesidad de que el usuario
-//     desinstale, limpie caché ni vuelva a activar notificaciones.
-//   - No hay cambios funcionales en el evento 'push', 'checkAndNotify()',
-//     ni en ningún otro mecanismo de notificación respecto de v25.0.
-// CORRECCIÓN v25.0 (se mantiene):
+// CAMBIOS v26.0:
+//   - Nuevo handler 'pushsubscriptionchange': si el navegador rota/expira la
+//     suscripción push, el SW se re-suscribe y la guarda en Firestore SIN que
+//     el usuario abra la app (antes quedaba huérfana y dejaba de notificar).
+//   - 'fired' ahora incluye el AÑO (antes el tag era MM-DD y el segundo año
+//     la app creía que ya había notificado).
+//   - renotify:true -> si queda una notificación vieja con el mismo tag en la
+//     bandeja (requireInteraction), la nueva igualmente suena/vibra.
+//   - index.html y recursos de la app: red primero, caché de respaldo (antes
+//     caché primero: la app nunca se actualizaba sola).
+// CORRECCIÓN v25.0:
 //   - Migración a WebPush nativo puro en todas las plataformas (Android,
 //     Windows/Edge, iOS, Firefox). Se eliminó la dependencia de Firebase
 //     Cloud Messaging (FCM) en el cliente y en el workflow de GitHub Actions,
@@ -46,6 +38,11 @@ const ICON_192      = 'https://caristim.github.io/oriente-fraterno/icon-192.png'
 const BADGE_URL     = 'https://caristim.github.io/oriente-fraterno/icon-192.png';
 
 const CACHE_NAME    = 'of-cache-v26.0';
+
+// Datos necesarios para re-registrar la suscripción desde el SW
+const VAPID_PUBLIC_KEY = 'BIrtqfJ3hWlKntqS1SwaKDxf4sFn5pHYfK-UxK9TvWdHfL-h_5Ebj0s4CMtElLeR_Rjd6mx1b_BhfqOmyokw44M';
+const FS_PROJECT       = 'orientefraterno148-2a0c1';
+const FS_API_KEY       = 'AIzaSyD9gQW61AvKHhNai6gljNFE7q9rS7KKuN8';
 const PRECACHE_URLS = [
   APP_ROOT,
   APP_ROOT + 'index.html',
@@ -80,6 +77,9 @@ function readPushJson(e) {
   return null;
 }
 
+// Clave de 'fired' con año: el tag del workflow es MM-DD y se repite cada año.
+function firedKey(tag) { return tag + '@' + new Date().getFullYear(); }
+
 // Muestra la notificación y guarda el tag directamente en fired{}.
 // No depende de que IndexedDB tenga la lista de eventos (funciona con app cerrada).
 async function showPushNotification(titulo, cuerpo, url, evTag) {
@@ -88,6 +88,7 @@ async function showPushNotification(titulo, cuerpo, url, evTag) {
     icon:               ICON_192,
     badge:              BADGE_URL,
     tag:                evTag,
+    renotify:           true,
     requireInteraction: true,
     vibrate:            [200, 100, 200, 100, 200],
     data:               { url },
@@ -97,8 +98,9 @@ async function showPushNotification(titulo, cuerpo, url, evTag) {
   // y lo encontrará en fired{}, evitando la doble notificación.
   try {
     const fired = (await dbGet('fired')) || {};
-    if (!fired[evTag]) {
-      fired[evTag] = true;
+    const k = firedKey(evTag);
+    if (!fired[k]) {
+      fired[k] = true;
       await dbSet('fired', fired);
     }
   } catch (err) {
@@ -156,6 +158,63 @@ self.addEventListener('push', e => {
   }));
 });
 
+// ── Re-suscripción automática (v26) ────────────────────────────────────────
+// Chrome/Firefox/Safari pueden invalidar la suscripción (rotación de claves,
+// limpieza de datos, expiración del servicio push). Sin este handler la
+// suscripción vieja queda en Firestore, el servidor recibe 404/410 y la
+// elimina; el dispositivo queda sin notificaciones hasta abrir la app.
+function urlB64ToU8(b64) {
+  const pad  = '='.repeat((4 - b64.length % 4) % 4);
+  const base = (b64 + pad).replace(/-/g, '+').replace(/_/g, '/');
+  return Uint8Array.from(atob(base), c => c.charCodeAt(0));
+}
+async function sha1Endpoint(ep) {
+  const buf = await crypto.subtle.digest('SHA-1', new TextEncoder().encode(ep));
+  return 'wp_' + Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('');
+}
+async function guardarSuscripcion(sub) {
+  const j = sub.toJSON();
+  if (!j.endpoint || !j.keys || !j.keys.p256dh || !j.keys.auth) return false;
+  const id  = await sha1Endpoint(j.endpoint);
+  const url = 'https://firestore.googleapis.com/v1/projects/' + FS_PROJECT +
+              '/databases/(default)/documents/webpush_subscriptions/' + id + '?key=' + FS_API_KEY;
+  const r = await fetch(url, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ fields: {
+      endpoint:  { stringValue: j.endpoint },
+      p256dh:    { stringValue: j.keys.p256dh },
+      auth:      { stringValue: j.keys.auth },
+      platform:  { stringValue: 'webpush' },
+      updatedAt: { stringValue: new Date().toISOString() },
+    } }),
+  });
+  return r.ok;
+}
+async function resuscribir(e) {
+  try {
+    const sub = await self.registration.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: urlB64ToU8(VAPID_PUBLIC_KEY),
+    });
+    const ok = await guardarSuscripcion(sub);
+    console.log('[SW] pushsubscriptionchange: re-suscripción', ok ? 'guardada' : 'NO guardada');
+    // Borrar la anterior (best-effort)
+    const old = e.oldSubscription;
+    if (old && old.endpoint && old.endpoint !== sub.endpoint) {
+      const oldId = await sha1Endpoint(old.endpoint);
+      await fetch('https://firestore.googleapis.com/v1/projects/' + FS_PROJECT +
+        '/databases/(default)/documents/webpush_subscriptions/' + oldId + '?key=' + FS_API_KEY,
+        { method: 'DELETE' }).catch(() => {});
+    }
+  } catch (err) {
+    console.warn('[SW] pushsubscriptionchange falló:', err.message);
+  }
+}
+self.addEventListener('pushsubscriptionchange', e => {
+  e.waitUntil(resuscribir(e));
+});
+
 // ── Canal local: respaldo cuando la app está abierta ─────────────────────────
 // Se activa al recibir SCHEDULE_EVENTS desde la app.
 // Usa el mismo algoritmo de tag que el workflow para deduplicar contra fired{}.
@@ -168,6 +227,12 @@ async function checkAndNotify() {
     const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
     const fired = (await dbGet('fired')) || {};
     let changed = false;
+
+    // Limpiar marcas de años anteriores
+    const yr = '@' + now.getFullYear();
+    for (const k of Object.keys(fired)) {
+      if (!k.endsWith(yr)) { delete fired[k]; changed = true; }
+    }
 
     for (const ev of events) {
       if (!ev.fecha || !ev.nombre || !ev.tipo) continue;
@@ -188,7 +253,7 @@ async function checkAndNotify() {
       const tag     = generarTag(ev.nombre, fechaMD);
 
       // Si el push externo ya disparó esta notificación hoy, no duplicar
-      if (fired[tag]) continue;
+      if (fired[firedKey(tag)]) continue;
 
       try {
         await self.registration.showNotification('Oriente Fraterno 148', {
@@ -196,11 +261,12 @@ async function checkAndNotify() {
           icon:               ICON_192,
           badge:              BADGE_URL,
           tag:                tag,
+          renotify:           true,
           requireInteraction: true,
           vibrate:            [200, 100, 200, 100, 200],
           data:               { url: APP_URL },
         });
-        fired[tag] = true;
+        fired[firedKey(tag)] = true;
         changed    = true;
       } catch (notifErr) {
         console.warn('[SW] showNotification falló:', notifErr.message);
@@ -291,19 +357,19 @@ self.addEventListener('fetch', e => {
   if (e.request.method !== 'GET') return;
   const url = e.request.url;
   if (url.startsWith(APP_ROOT)) {
+    // Red primero (la app se actualiza sola); caché solo si no hay conexión.
     e.respondWith(
-      caches.match(e.request).then(cached => {
-        if (cached) return cached;
-        return fetch(e.request).then(response => {
-          if (response && response.status === 200) {
-            caches.open(CACHE_NAME).then(c => c.put(e.request, response.clone()));
-          }
-          return response;
-        }).catch(() =>
-          caches.match(APP_ROOT + 'index.html')
-            .then(fb => fb || new Response('Sin conexión', { status: 503 }))
-        );
-      })
+      fetch(e.request).then(response => {
+        if (response && response.status === 200) {
+          const copy = response.clone();
+          caches.open(CACHE_NAME).then(c => c.put(e.request, copy));
+        }
+        return response;
+      }).catch(() =>
+        caches.match(e.request).then(cached =>
+          cached || caches.match(APP_ROOT + 'index.html')
+            .then(fb => fb || new Response('Sin conexión', { status: 503 })))
+      )
     );
     return;
   }
