@@ -225,7 +225,9 @@ jobs:
                 console.log('       privada/subject de los Secrets no coincide con la pública de index.html.');
               }
               console.log('  ---');
-              return { invalid, ok: false };
+              // v27: 403 por clave VAPID distinta = suscripción inservible para siempre
+              const vapidViejo = err.statusCode === 403 && /VAPID credentials/i.test(String(err.body || ''));
+              return { invalid, ok: false, vapidViejo };
             }
           }
 
@@ -388,6 +390,7 @@ jobs:
             // ── [3/3] Enviar notificaciones ──────────────────────────────────
             console.log('\n[3/3] Enviando notificaciones...');
             const wpInvalidos = new Set();
+            const wpVapidViejos = new Set();
             let okCount = 0;
 
             for (const ev of eventos) {
@@ -409,7 +412,16 @@ jobs:
                 const r = await webPushSend(subscription, titulo, cuerpo, appUrl, tag);
                 if (r.invalid) wpInvalidos.add(sub.docName);
                 if (r.ok) okCount++;
+                if (r.vapidViejo) wpVapidViejos.add(sub.docName);
               }
+            }
+
+            // v27: solo se borran las de clave VAPID antigua si OTRAS suscripciones
+            // sí funcionaron en esta misma ejecución. Así, si alguna vez se
+            // configuran mal los Secrets (y TODAS dieran 403), no se borra nada.
+            if (okCount > 0 && wpVapidViejos.size > 0) {
+              console.log(`\n${wpVapidViejos.size} suscripción(es) con clave VAPID antigua: se eliminan (el dispositivo se re-suscribe al abrir la app).`);
+              for (const dn of wpVapidViejos) wpInvalidos.add(dn);
             }
 
             if (wpInvalidos.size > 0) {
