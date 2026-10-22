@@ -68,14 +68,44 @@
       return 'wp_' + Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2,'0')).join('');
     }
 
+    // v27: detecta suscripciones creadas con OTRA clave VAPID (el servidor push
+    // las rechaza con 403). Si la clave de la suscripción no coincide con la
+    // actual, se anula y se crea una nueva, sin que el usuario tenga que
+    // borrar los datos del sitio.
+    function claveCoincide(sub) {
+      try {
+        const k = sub.options && sub.options.applicationServerKey;
+        if (!k) return true;                       // el navegador no lo informa: no se puede comprobar
+        const a = new Uint8Array(k);
+        const b = urlBase64ToUint8Array(VAPID_PUBLIC_KEY);
+        if (a.length !== b.length) return false;
+        for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+        return true;
+      } catch(_) { return true; }
+    }
+
+    async function obtenerSuscripcionVigente(reg) {
+      let sub = await reg.pushManager.getSubscription();
+      if (sub && !claveCoincide(sub)) {
+        console.warn('[WebPush] Suscripción con clave VAPID antigua; se reemplaza.');
+        const viejoEndpoint = sub.endpoint;
+        try { await sub.unsubscribe(); } catch(_) {}
+        try {
+          if (db) await db.collection('webpush_subscriptions').doc(await hashEndpoint(viejoEndpoint)).delete();
+        } catch(_) {}
+        sub = null;
+      }
+      if (!sub) sub = await reg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY),
+      });
+      return sub;
+    }
+
     async function registrarWebPush(reg) {
       try {
-        if (!('PushManager' in window) || !db) return false;
-        let sub = await reg.pushManager.getSubscription();
-        if (!sub) sub = await reg.pushManager.subscribe({
-          userVisibleOnly: true,
-          applicationServerKey: urlBase64ToUint8Array(VAPID_PUBLIC_KEY),
-        });
+        if (!reg || !('PushManager' in window) || !db) return false;
+        const sub = await obtenerSuscripcionVigente(reg);
         if (!sub) return false;
         const j = sub.toJSON();
         if (!j.endpoint || !j.keys || !j.keys.p256dh || !j.keys.auth) return false;
@@ -89,29 +119,12 @@
       } catch(e) { console.error('[WebPush] Error:', e.message); return false; }
     }
 
-    // v26: además de re-guardar la suscripción, si el navegador la perdió
-    // (getSubscription() === null) pero el permiso sigue concedido, se
-    // vuelve a suscribir automáticamente. Antes solo re-guardaba una
-    // suscripción existente, por lo que una caducada nunca se recuperaba.
+    // Se ejecuta al abrir la app: re-guarda la suscripción y, si estaba
+    // obsoleta o perdida, la reemplaza automáticamente.
     async function renovarRegistros(reg) {
       if (!db || !reg || !('PushManager' in window)) return;
       if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
-      try {
-        let sub = await reg.pushManager.getSubscription();
-        if (!sub) {
-          console.warn('[WebPush] Suscripción perdida; re-suscribiendo...');
-          await registrarWebPush(reg);
-          return;
-        }
-        const j = sub.toJSON();
-        if (j.endpoint && j.keys && j.keys.p256dh && j.keys.auth) {
-          const platform = isIOS() ? 'ios' : 'webpush';
-          await db.collection('webpush_subscriptions').doc(await hashEndpoint(j.endpoint)).set({
-            endpoint: j.endpoint, p256dh: j.keys.p256dh, auth: j.keys.auth,
-            platform, updatedAt: new Date().toISOString(),
-          });
-        }
-      } catch(e) { console.warn('[WebPush] Renovación falló:', e.message); }
+      await registrarWebPush(reg);
     }
 
     async function activarNotificaciones(reg) {
